@@ -49,8 +49,10 @@ def load_config(path=CONFIG_PATH):
                 "models_root": "data/models",
             },
             "joystick": {
-                "max_speed": 0.5,   # cap |v|
-                "max_rot": 0.8      # cap |w|
+                "max_speed": 0.5,    # cap |v|
+                "max_rot": 0.8,      # cap |w|
+                "speed_gain": 1.0,   # shaping gain on v (server side)
+                "steer_gain": 1.0,   # shaping gain on w (server side)
             },
         }
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -94,7 +96,7 @@ logger.info("AI Car server starting up...")
 class CameraManager:
     """
     Hybrid camera manager:
-      1. Try Picamera2 (RGB888)
+      1. Try Picamera2 (BGR888)
       2. Try /dev/video* via OpenCV V4L2
       3. Try GStreamer libcamerasrc → BGR
 
@@ -150,16 +152,18 @@ class CameraManager:
         # Try Picamera2 first
         try:
             from picamera2 import Picamera2  # type: ignore
+
             cam = Picamera2()
+            # Use BGR888 so frames are already BGR for OpenCV
             cfg = cam.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "RGB888"},
+                main={"size": (self.width, self.height), "format": "BGR888"},
                 buffer_count=3,
             )
             cam.configure(cfg)
             cam.start()
             self._picam2 = cam
             self._backend = "picamera2"
-            logger.info("Camera: using Picamera2 backend (RGB888)")
+            logger.info("Camera: using Picamera2 backend (BGR888)")
             return True
         except Exception as e:
             logger.info(f"Camera: Picamera2 not available: {e!r}")
@@ -272,12 +276,11 @@ class CameraManager:
     # -------- Grabbing frames --------
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
-            # Picamera2 gives us RGB, convert to BGR for OpenCV
+            # Picamera2 already gives us BGR888 now
             arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
-            arr = arr[..., ::-1]
-            return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            return arr
 
         if self._cap is not None:
             ok, frame = self._cap.read()
@@ -584,44 +587,89 @@ target_w = 0.0
 current_v = 0.0
 current_w = 0.0
 
-JOY_MAX_DV = 0.05   # maximum change per tick in v
-JOY_MAX_DW = 0.08   # maximum change per tick in w
-JOY_LOOP_HZ = 50.0
-
-JOY_CMD_TIMEOUT = 0.3  # seconds
-last_cmd_time = 0.0
+# Loop rate and rate limits
+JOY_LOOP_HZ = 80.0              # faster control loop
+JOY_MAX_DV = 0.035              # max delta per tick in v (accel)
+JOY_MAX_DW = 0.06               # max delta per tick in w (accel)
 
 # global caps from config
 JOY_MAX_SPEED = float(CONFIG.get("joystick", {}).get("max_speed", 0.5))
 JOY_MAX_ROT = float(CONFIG.get("joystick", {}).get("max_rot", 0.8))
 
+# joystick timeout: if no new cmd for this long (and no autopilot) → stop
+JOY_CMD_TIMEOUT = 0.25  # seconds
+last_cmd_time = 0.0
+
 _control_thread = None
 _control_running = True
 
+
 def vw_to_lr(v: float, w: float, turn_gain: float = 1.0):
     """
-    Map JetBot-style (v, w) into left/right wheel speeds.
+    Map JetBot-style (v, w) into normalized left/right wheel speeds.
 
     v: linear velocity  [-1, 1]
     w: angular velocity [-1, 1]
     turn_gain: how aggressive rotation is relative to forward speed
 
-    We **do not** renormalize both wheels together; we just clamp each wheel
-    individually so small gains stay small.
+    IMPORTANT: we DO NOT renormalize both wheels together; instead we
+    clamp each wheel independently, so small v/w are preserved.
     """
     left = v - turn_gain * w
     right = v + turn_gain * w
 
-    # Clamp each wheel individually to [-1, 1]
+    # clamp each wheel individually
     left = max(-1.0, min(1.0, left))
     right = max(-1.0, min(1.0, right))
-
     return left, right
+
+
+def _rate_step(current: float, target: float,
+               accel_lim: float, decel_lim: float, brake_lim: float) -> float:
+    """
+    Asymmetric rate limiter:
+
+    - Small accel limit when speeding up
+    - Slightly larger decel limit when slowing down
+    - Much larger limit when crossing zero (braking / reversing)
+    """
+    dv = target - current
+
+    if current * target < 0.0:
+        # crossing zero → brake harder
+        lim = brake_lim
+    elif abs(target) > abs(current):
+        # speeding up
+        lim = accel_lim
+    else:
+        # slowing down (same sign)
+        lim = decel_lim
+
+    if dv > lim:
+        dv = lim
+    elif dv < -lim:
+        dv = -lim
+
+    return current + dv
+
+
+def _apply_expo(x: float, expo: float) -> float:
+    """
+    Exponential sensitivity shaping:
+      expo=0 -> linear
+      expo>0 -> finer near center, steeper at edges
+    """
+    sign = 1.0 if x >= 0.0 else -1.0
+    ax = abs(x)
+    y = expo * (ax ** 3) + (1.0 - expo) * ax
+    return sign * y
+
 
 def _control_loop():
     """
     Runs in the background and smoothly moves current_v/current_w
     towards target_v/target_w, then drives the motors.
+    Also enforces a timeout on joystick commands when autopilot is off.
     """
     global current_v, current_w, target_v, target_w, last_cmd_time
     period = 1.0 / JOY_LOOP_HZ
@@ -631,24 +679,27 @@ def _control_loop():
         try:
             now = time.time()
 
-            # If joystick commands have gone stale (e.g., lost pointerup),
-            # force target_v,w to zero. Autopilot keeps updating regularly,
-            # so it won't be affected.
-            if not deploy_status["autopilot"]:
-                if last_cmd_time > 0 and (now - last_cmd_time) > JOY_CMD_TIMEOUT:
+            # Joystick timeout: if no command recently and no autopilot → decay target to 0
+            if not deploy_status.get("autopilot", False):
+                if last_cmd_time > 0.0 and (now - last_cmd_time) > JOY_CMD_TIMEOUT:
                     target_v = 0.0
                     target_w = 0.0
 
-            dv = target_v - current_v
-            dw = target_w - current_w
-
-            if abs(dv) > JOY_MAX_DV:
-                dv = JOY_MAX_DV * (1 if dv > 0 else -1)
-            if abs(dw) > JOY_MAX_DW:
-                dw = JOY_MAX_DW * (1 if dw > 0 else -1)
-
-            current_v += dv
-            current_w += dw
+            # Rate-limit v,w with aggressive braking
+            current_v = _rate_step(
+                current_v,
+                target_v,
+                accel_lim=JOY_MAX_DV,
+                decel_lim=JOY_MAX_DV * 1.2,
+                brake_lim=JOY_MAX_DV * 3.0,
+            )
+            current_w = _rate_step(
+                current_w,
+                target_w,
+                accel_lim=JOY_MAX_DW,
+                decel_lim=JOY_MAX_DW * 1.2,
+                brake_lim=JOY_MAX_DW * 3.0,
+            )
 
             # Apply caps on v, w BEFORE mixing
             v = max(-JOY_MAX_SPEED, min(JOY_MAX_SPEED, current_v))
@@ -662,6 +713,7 @@ def _control_loop():
         time.sleep(period)
 
     logger.info("[control] loop stopped")
+
 
 # ============================================================
 # Flask app + globals
@@ -1022,17 +1074,34 @@ def api_motors_stop():
 @app.route("/api/motors/cmd", methods=["POST"])
 def api_motors_cmd():
     """
-    Set target linear/angular velocity from joystick:
+    Set target linear/angular velocity from joystick (raw):
       body: { "v": float, "w": float }
+
+    These are raw [-1,1] joystick values. We do expo + gains + clamping here.
     """
     global target_v, target_w, last_cmd_time
     body = request.get_json(silent=True) or {}
     try:
-        v = float(body.get("v", 0.0))
-        w = float(body.get("w", 0.0))
+        v_raw = float(body.get("v", 0.0))
+        w_raw = float(body.get("w", 0.0))
     except Exception:
         return err("invalid v/w", 400)
 
+    # clamp raw
+    v_raw = max(-1.0, min(1.0, v_raw))
+    w_raw = max(-1.0, min(1.0, w_raw))
+
+    # local gains / expo for joystick
+    expo_trans = 0.3
+    expo_rot = 0.4
+    joy_cfg = CONFIG.get("joystick", {})
+    speed_gain = float(joy_cfg.get("speed_gain", 1.0))
+    steer_gain = float(joy_cfg.get("steer_gain", 1.0))
+
+    v = _apply_expo(v_raw, expo_trans) * speed_gain
+    w = _apply_expo(w_raw, expo_rot) * steer_gain
+
+    # clamp shaped commands
     v = max(-1.0, min(1.0, v))
     w = max(-1.0, min(1.0, w))
 

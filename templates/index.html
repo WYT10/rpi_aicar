@@ -507,10 +507,10 @@
             </div>
 
             <div class="row">
-              <label>Speed gain:
+              <label>Speed gain (visual only):
                 <input id="joy-speed" type="number" step="0.1" value="0.6" min="0" max="1">
               </label>
-              <label>Steering gain:
+              <label>Steering gain (visual only):
                 <input id="joy-steer" type="number" step="0.1" value="0.7" min="0" max="1">
               </label>
             </div>
@@ -910,17 +910,10 @@
         '<span class="pill-dot"></span> logging: off';
     }
 
-    // ---------- Smooth joystick → (v,w) ----------
-    const JOY_DEADZONE = 0.1;
-    const CMD_MAX_HZ = 25;
+    // ---------- Smooth joystick → raw (v,w) ----------
+    const JOY_DEADZONE = 0.12;   // deadzone in joystick space
+    const CMD_MAX_HZ = 40;       // max HTTP command rate
     let lastCmdSend = 0;
-
-    function applyExpo(x, expo) {
-      const sign = x >= 0 ? 1 : -1;
-      const ax = Math.abs(x);
-      const y = expo * (ax * ax * ax) + (1 - expo) * ax;
-      return sign * y;
-    }
 
     function sendVW(v, w, force = false) {
       const now = performance.now();
@@ -983,8 +976,6 @@
           hardStopJoystick();
         }
       });
-
-
     }
 
     function resetJoystick() {
@@ -1017,6 +1008,7 @@
         resetJoystick();
         document.getElementById("left").value = "0.00";
         document.getElementById("right").value = "0.00";
+        // send explicit zero once
         sendVW(0.0, 0.0, true);
         return;
       }
@@ -1025,37 +1017,27 @@
       handle.style.left = (50 + (nx * 50)) + "%";
       handle.style.top = (50 + (ny * 50)) + "%";
 
-      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1.0");
-      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1.0");
-
-      // IMPORTANT: raw mapping
+      // Raw mapping (no shaping here, server does expo+gains)
       let v_raw = -ny;  // up = forward
-      let w_raw = -nx;   // right = positive turn (flip sign if steering inverted)
+      let w_raw = -nx;  // right = positive turn
 
-      const expoTrans = 0.3;
-      const expoRot = 0.4;
+      // clamp raw for safety
+      v_raw = Math.max(-1, Math.min(1, v_raw));
+      w_raw = Math.max(-1, Math.min(1, w_raw));
 
-      let v = applyExpo(v_raw, expoTrans) * speedGain;
-      let w = applyExpo(w_raw, expoRot) * steerGain;
+      // Estimate L/R for UI (same mix as server)
+      let left = v_raw - w_raw;
+      let right = v_raw + w_raw;
 
-      // clamp to [-1,1]
-      v = Math.max(-1, Math.min(1, v));
-      w = Math.max(-1, Math.min(1, w));
-
-      // Estimate L/R for UI, match server's no-normalize mix
-      let left = v - w;
-      let right = v + w;
-
-      // Clamp each wheel individually to [-1, 1] (no shared rescale)
+      // clamp each wheel independently just for display
       left = Math.max(-1, Math.min(1, left));
       right = Math.max(-1, Math.min(1, right));
 
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
 
-
-      // Send to smooth controller
-      sendVW(v, w, false);
+      // Send raw v,w to smooth controller
+      sendVW(v_raw, w_raw, false);
     }
 
     function hardStopJoystick() {
@@ -1071,7 +1053,6 @@
       // Also call the stop endpoint to zero currents + motors
       fetch("/api/motors/stop", { method: "POST" }).catch(() => { });
     }
-
 
     // ---------- Train tab ----------
     async function refreshTrainDatasets() {
