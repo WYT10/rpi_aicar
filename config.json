@@ -4,9 +4,9 @@
     "port": 8888
   },
   "camera": {
-    "width": 640,
-    "height": 480,
-    "fps": 20
+    "width": 320,
+    "height": 240,
+    "fps": 15
   },
   "motor": {
     "pins": {
@@ -26,8 +26,13 @@
   },
   "paths": {
     "logs_root": "data/logs",
-    "dataset_root": "data/datasets",
-    "models_root": "data/models",
-    "fs_root": "."
+    "datasets_root": "data/datasets",
+    "models_root": "data/models"
+  },
+  "joystick": {
+    "max_speed": 0.5,
+    "max_rot": 0.8,
+    "speed_gain": 1.0,
+    "steer_gain": 1.0
   }
 }

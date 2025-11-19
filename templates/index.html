@@ -184,6 +184,8 @@
       border-radius: 12px;
       background: #000;
       max-width: 100%;
+      width: 320px;
+      height: auto;
       border: 1px solid rgba(255, 255, 255, 0.12);
       box-shadow: 0 14px 30px rgba(0, 0, 0, 0.8);
       cursor: crosshair;
@@ -491,32 +493,32 @@
             </div>
             <div class="joystick-caption">
               Drag inside the circle to drive.
-              <br>Up/down = forward/back, left/right = turn.
+              <br>Up = forward, left/right = turn. Forward-only motors.
             </div>
           </div>
           <div>
             <div class="row">
               <label>Left:
-                <input id="left" type="number" step="0.1" value="0.0" min="-1" max="1">
+                <input id="left" type="number" step="0.1" value="0.0" min="0" max="1">
               </label>
             </div>
             <div class="row">
               <label>Right:
-                <input id="right" type="number" step="0.1" value="0.0" min="-1" max="1">
+                <input id="right" type="number" step="0.1" value="0.0" min="0" max="1">
               </label>
             </div>
 
             <div class="row">
-              <label>Speed gain (visual only):
-                <input id="joy-speed" type="number" step="0.1" value="0.6" min="0" max="1">
+              <label>Speed gain:
+                <input id="joy-speed" type="number" step="0.1" value="0.8" min="0" max="1">
               </label>
-              <label>Steering gain (visual only):
+              <label>Steering gain:
                 <input id="joy-steer" type="number" step="0.1" value="0.7" min="0" max="1">
               </label>
             </div>
 
             <div class="row">
-              <button onclick="sendMotors()">Apply (direct)</button>
+              <button onclick="applyDirectMotors()">Apply (direct)</button>
               <button onclick="stopMotors()">Stop</button>
             </div>
           </div>
@@ -866,8 +868,8 @@
       el.textContent = JSON.stringify(data.data, null, 2);
     }
 
-    // ---------- Manual motors (direct openloop) ----------
-    async function sendMotors() {
+    // ---------- Manual motors (direct openloop from inputs) ----------
+    async function applyDirectMotors() {
       const left = parseFloat(document.getElementById("left").value || "0");
       const right = parseFloat(document.getElementById("right").value || "0");
       await fetch("/api/motors/openloop", {
@@ -882,7 +884,6 @@
       document.getElementById("left").value = "0.0";
       document.getElementById("right").value = "0.0";
       resetJoystick();
-      lastCmdSend = 0;
     }
 
     // ---------- Logging (stub) ----------
@@ -910,25 +911,8 @@
         '<span class="pill-dot"></span> logging: off';
     }
 
-    // ---------- Smooth joystick → raw (v,w) ----------
-    const JOY_DEADZONE = 0.12;   // deadzone in joystick space
-    const CMD_MAX_HZ = 40;       // max HTTP command rate
-    let lastCmdSend = 0;
-
-    function sendVW(v, w, force = false) {
-      const now = performance.now();
-      const minInterval = 1000 / CMD_MAX_HZ;
-      if (!force && (now - lastCmdSend) < minInterval) {
-        return;
-      }
-      lastCmdSend = now;
-      fetch("/api/motors/cmd", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ v, w })
-      }).catch(() => { });
-    }
-
+    // ---------- Joystick → left/right forward-only ----------
+    const JOY_DEADZONE = 0.1;
     let joystickActive = false;
 
     function setupJoystick() {
@@ -956,21 +940,18 @@
         hardStopJoystick();
       });
 
-      // If pointer leaves the joystick area while active
       base.addEventListener("pointerleave", () => {
         if (joystickActive) {
           hardStopJoystick();
         }
       });
 
-      // If the window loses focus, stop
       window.addEventListener("blur", () => {
         if (joystickActive) {
           hardStopJoystick();
         }
       });
 
-      // If tab becomes hidden, stop
       document.addEventListener("visibilitychange", () => {
         if (document.hidden && joystickActive) {
           hardStopJoystick();
@@ -982,6 +963,14 @@
       const handle = document.getElementById("joystick-handle");
       handle.style.left = "50%";
       handle.style.top = "50%";
+    }
+
+    async function sendOpenloop(left, right) {
+      await fetch("/api/motors/openloop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ left, right })
+      });
     }
 
     function updateJoystick(e, base, handle) {
@@ -999,45 +988,47 @@
         dy *= maxR / dist;
       }
 
-      const nx = dx / maxR;   // [-1, 1] left/right
-      const ny = dy / maxR;   // [-1, 1] up/down
+      // Normalized joystick coordinates [-1,1]
+      const nx = dx / maxR;   // left/right
+      const ny = dy / maxR;   // up/down
 
-      // Deadzone
       const mag = Math.sqrt(nx * nx + ny * ny);
       if (mag < JOY_DEADZONE) {
         resetJoystick();
         document.getElementById("left").value = "0.00";
         document.getElementById("right").value = "0.00";
-        // send explicit zero once
-        sendVW(0.0, 0.0, true);
+        sendOpenloop(0.0, 0.0);
         return;
       }
 
-      // Handle visual
+      // Visual
       handle.style.left = (50 + (nx * 50)) + "%";
       handle.style.top = (50 + (ny * 50)) + "%";
 
-      // Raw mapping (no shaping here, server does expo+gains)
-      let v_raw = -ny;  // up = forward
-      let w_raw = -nx;  // right = positive turn
+      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1.0");
+      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1.0");
 
-      // clamp raw for safety
-      v_raw = Math.max(-1, Math.min(1, v_raw));
-      w_raw = Math.max(-1, Math.min(1, w_raw));
+      // Forward component: up is negative ny
+      let v_raw = -ny;                    // [-1,1]
+      v_raw = Math.max(0.0, v_raw);      // forward-only
+      let v = v_raw * speedGain;         // [0,1] scaled
 
-      // Estimate L/R for UI (same mix as server)
-      let left = v_raw - w_raw;
-      let right = v_raw + w_raw;
+      // Steering component: left/right
+      let s = -nx * steerGain;            // [-1,1] scaled
 
-      // clamp each wheel independently just for display
-      left = Math.max(-1, Math.min(1, left));
-      right = Math.max(-1, Math.min(1, right));
+      // Simple differential: left/right = v ± k*s*v
+      const k = 1.0;
+      let left = v * (1 - k * s);
+      let right = v * (1 + k * s);
+
+      // Clamp to [0,1]
+      left = Math.max(0.0, Math.min(1.0, left));
+      right = Math.max(0.0, Math.min(1.0, right));
 
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
 
-      // Send raw v,w to smooth controller
-      sendVW(v_raw, w_raw, false);
+      sendOpenloop(left, right);
     }
 
     function hardStopJoystick() {
@@ -1045,13 +1036,7 @@
       resetJoystick();
       document.getElementById("left").value = "0.0";
       document.getElementById("right").value = "0.0";
-      lastCmdSend = 0;
-
-      // Tell the smooth controller to zero v,w immediately
-      sendVW(0.0, 0.0, true);
-
-      // Also call the stop endpoint to zero currents + motors
-      fetch("/api/motors/stop", { method: "POST" }).catch(() => { });
+      sendOpenloop(0.0, 0.0);
     }
 
     // ---------- Train tab ----------

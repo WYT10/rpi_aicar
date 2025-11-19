@@ -23,10 +23,10 @@ CONFIG_PATH = os.path.join(ROOT, "config.json")
 
 def load_config(path=CONFIG_PATH):
     if not os.path.exists(path):
-        # minimal default config
+        # minimal default config (smaller camera + fps to reduce load)
         cfg = {
             "server": {"host": "0.0.0.0", "port": 8888},
-            "camera": {"width": 640, "height": 480, "fps": 20},
+            "camera": {"width": 320, "height": 240, "fps": 15},
             "motor": {
                 "pins": {
                     "left_forward": 5,
@@ -48,12 +48,6 @@ def load_config(path=CONFIG_PATH):
                 "datasets_root": "data/datasets",
                 "models_root": "data/models",
             },
-            "joystick": {
-                "max_speed": 0.5,    # cap |v|
-                "max_rot": 0.8,      # cap |w|
-                "speed_gain": 1.0,   # shaping gain on v (server side)
-                "steer_gain": 1.0,   # shaping gain on w (server side)
-            },
         }
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
@@ -69,9 +63,8 @@ DATA_ROOT = os.path.join(ROOT, "data")
 LOG_ROOT = os.path.join(DATA_ROOT, "logs")
 DATASETS_ROOT = os.path.join(DATA_ROOT, "datasets")
 MODELS_ROOT = os.path.join(DATA_ROOT, "models")
-TMP_ROOT = os.path.join(DATA_ROOT, "tmp")
 
-for d in (DATA_ROOT, LOG_ROOT, DATASETS_ROOT, MODELS_ROOT, TMP_ROOT):
+for d in (DATA_ROOT, LOG_ROOT, DATASETS_ROOT, MODELS_ROOT):
     os.makedirs(d, exist_ok=True)
 
 log_path = os.path.join(LOG_ROOT, "app.log")
@@ -110,7 +103,7 @@ class CameraManager:
       - update_settings(...)
     """
 
-    def __init__(self, width=640, height=480, fps=20):
+    def __init__(self, width=320, height=240, fps=15):
         self.width = int(width)
         self.height = int(height)
         self.fps = int(fps)
@@ -133,6 +126,10 @@ class CameraManager:
         self.gray = False
         self.mode = "raw"  # raw / gray / edges
         self.gamma = 1.0
+
+        # gamma LUT cache (for speed)
+        self._gamma_lut = None
+        self._gamma_lut_for = None
 
     # -------- Backend detection helpers --------
     @staticmethod
@@ -234,19 +231,34 @@ class CameraManager:
 
     # -------- Processing --------
     def _apply_processing(self, frame_bgr):
+        # Fast path: absolutely raw, no processing
+        if (
+            not self.vflip
+            and not self.hflip
+            and not self.gray
+            and self.mode == "raw"
+            and abs(self.gamma - 1.0) < 1e-3
+        ):
+            return frame_bgr
+
         img = frame_bgr
 
+        # flips
         if self.vflip:
             img = cv2.flip(img, 0)
         if self.hflip:
             img = cv2.flip(img, 1)
 
+        # gamma (with cached LUT)
         if abs(self.gamma - 1.0) > 1e-3:
-            inv = 1.0 / max(self.gamma, 1e-6)
-            table = (np.arange(256) / 255.0) ** inv * 255.0
-            lut = np.clip(table, 0, 255).astype(np.uint8)
-            img = cv2.LUT(img, lut)
+            if self._gamma_lut_for != self.gamma or self._gamma_lut is None:
+                inv = 1.0 / max(self.gamma, 1e-6)
+                table = (np.arange(256, dtype=np.float32) / 255.0) ** inv * 255.0
+                self._gamma_lut = np.clip(table, 0, 255).astype(np.uint8)
+                self._gamma_lut_for = self.gamma
+            img = cv2.LUT(img, self._gamma_lut)
 
+        # mode / gray / edges
         mode = self.mode
         if mode == "gray" or (self.gray and mode == "raw"):
             g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -276,10 +288,12 @@ class CameraManager:
     # -------- Grabbing frames --------
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
-            # Picamera2 already gives us BGR888 now
+            # Picamera2 already gives us BGR888
             arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
+            # If your camera already returns BGR, you can drop this line.
+            arr = arr[..., ::-1]
             return arr
 
         if self._cap is not None:
@@ -365,7 +379,9 @@ class MotorBase:
 
 class MotorDummy(MotorBase):
     def set_openloop(self, left: float, right: float):
-        logger.info(f"[MOTOR dummy] L={left:+.2f} R={right:+.2f}")
+        # Debug only; keep quiet for speed
+        # logger.debug(f"[MOTOR dummy] L={left:+.2f} R={right:+.2f}")
+        pass
 
     def stop(self):
         logger.info("[MOTOR dummy] stop")
@@ -421,14 +437,15 @@ class MotorPigpio(MotorBase):
         self.pi.set_PWM_dutycycle(int(pin), int(255 * duty_pct / 100.0))
 
     def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
+        # forward-only: ignore reverse
         v = -value if invert else value
-        if abs(v) < self.deadzone:
+        v = max(0.0, min(1.0, v))
+        if v < self.deadzone:
             v = 0.0
-        v = max(-1.0, min(1.0, v))
 
         self.pi.write(int(fwd_pin), 1 if v > 0 else 0)
-        self.pi.write(int(rev_pin), 1 if v < 0 else 0)
-        self._set_pwm(pwm_pin, abs(v) * self.max_duty)
+        self.pi.write(int(rev_pin), 0)
+        self._set_pwm(pwm_pin, v * self.max_duty)
 
     def set_openloop(self, left: float, right: float):
         self._drive_channel(self.LP, self.LF, self.LB, left, self.invL)
@@ -499,15 +516,16 @@ class MotorRPiGPIO(MotorBase):
         duty_pct = max(0, min(100, duty_pct))
         pwm.ChangeDutyCycle(duty_pct)
 
-    def _drive_channel(self, pwm, fwd_pin, rev_pin, value, invert):
+    def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
+        # forward-only: ignore reverse
         v = -value if invert else value
-        if abs(v) < self.deadzone:
+        v = max(0.0, min(1.0, v))
+        if v < self.deadzone:
             v = 0.0
-        v = max(-1.0, min(1.0, v))
 
         self.GPIO.output(fwd_pin, self.GPIO.HIGH if v > 0 else self.GPIO.LOW)
-        self.GPIO.output(rev_pin, self.GPIO.HIGH if v < 0 else self.GPIO.LOW)
-        self._set_pwm(pwm, abs(v) * self.max_duty)
+        self.GPIO.output(rev_pin, self.GPIO.LOW)
+        self._set_pwm(pwm_pin, v * self.max_duty)
 
     def set_openloop(self, left: float, right: float):
         self._drive_channel(self.pwmL, self.LF, self.LB, left, self.invL)
@@ -577,145 +595,6 @@ class MotorController:
 
 
 # ============================================================
-# Smooth joystick / autopilot (v, w) control loop
-# ============================================================
-
-# Target and current commands in "JetBot" space:
-# v = linear velocity [-1,1], w = angular velocity [-1,1]
-target_v = 0.0
-target_w = 0.0
-current_v = 0.0
-current_w = 0.0
-
-# Loop rate and rate limits
-JOY_LOOP_HZ = 80.0              # faster control loop
-JOY_MAX_DV = 0.035              # max delta per tick in v (accel)
-JOY_MAX_DW = 0.06               # max delta per tick in w (accel)
-
-# global caps from config
-JOY_MAX_SPEED = float(CONFIG.get("joystick", {}).get("max_speed", 0.5))
-JOY_MAX_ROT = float(CONFIG.get("joystick", {}).get("max_rot", 0.8))
-
-# joystick timeout: if no new cmd for this long (and no autopilot) → stop
-JOY_CMD_TIMEOUT = 0.25  # seconds
-last_cmd_time = 0.0
-
-_control_thread = None
-_control_running = True
-
-
-def vw_to_lr(v: float, w: float, turn_gain: float = 1.0):
-    """
-    Map JetBot-style (v, w) into normalized left/right wheel speeds.
-
-    v: linear velocity  [-1, 1]
-    w: angular velocity [-1, 1]
-    turn_gain: how aggressive rotation is relative to forward speed
-
-    IMPORTANT: we DO NOT renormalize both wheels together; instead we
-    clamp each wheel independently, so small v/w are preserved.
-    """
-    left = v - turn_gain * w
-    right = v + turn_gain * w
-
-    # clamp each wheel individually
-    left = max(-1.0, min(1.0, left))
-    right = max(-1.0, min(1.0, right))
-    return left, right
-
-
-def _rate_step(current: float, target: float,
-               accel_lim: float, decel_lim: float, brake_lim: float) -> float:
-    """
-    Asymmetric rate limiter:
-
-    - Small accel limit when speeding up
-    - Slightly larger decel limit when slowing down
-    - Much larger limit when crossing zero (braking / reversing)
-    """
-    dv = target - current
-
-    if current * target < 0.0:
-        # crossing zero → brake harder
-        lim = brake_lim
-    elif abs(target) > abs(current):
-        # speeding up
-        lim = accel_lim
-    else:
-        # slowing down (same sign)
-        lim = decel_lim
-
-    if dv > lim:
-        dv = lim
-    elif dv < -lim:
-        dv = -lim
-
-    return current + dv
-
-
-def _apply_expo(x: float, expo: float) -> float:
-    """
-    Exponential sensitivity shaping:
-      expo=0 -> linear
-      expo>0 -> finer near center, steeper at edges
-    """
-    sign = 1.0 if x >= 0.0 else -1.0
-    ax = abs(x)
-    y = expo * (ax ** 3) + (1.0 - expo) * ax
-    return sign * y
-
-
-def _control_loop():
-    """
-    Runs in the background and smoothly moves current_v/current_w
-    towards target_v/target_w, then drives the motors.
-    Also enforces a timeout on joystick commands when autopilot is off.
-    """
-    global current_v, current_w, target_v, target_w, last_cmd_time
-    period = 1.0 / JOY_LOOP_HZ
-
-    logger.info("[control] loop started @ %.1f Hz", JOY_LOOP_HZ)
-    while _control_running:
-        try:
-            now = time.time()
-
-            # Joystick timeout: if no command recently and no autopilot → decay target to 0
-            if not deploy_status.get("autopilot", False):
-                if last_cmd_time > 0.0 and (now - last_cmd_time) > JOY_CMD_TIMEOUT:
-                    target_v = 0.0
-                    target_w = 0.0
-
-            # Rate-limit v,w with aggressive braking
-            current_v = _rate_step(
-                current_v,
-                target_v,
-                accel_lim=JOY_MAX_DV,
-                decel_lim=JOY_MAX_DV * 1.2,
-                brake_lim=JOY_MAX_DV * 3.0,
-            )
-            current_w = _rate_step(
-                current_w,
-                target_w,
-                accel_lim=JOY_MAX_DW,
-                decel_lim=JOY_MAX_DW * 1.2,
-                brake_lim=JOY_MAX_DW * 3.0,
-            )
-
-            # Apply caps on v, w BEFORE mixing
-            v = max(-JOY_MAX_SPEED, min(JOY_MAX_SPEED, current_v))
-            w = max(-JOY_MAX_ROT, min(JOY_MAX_ROT, current_w))
-
-            left, right = vw_to_lr(v, w, turn_gain=1.0)
-            motors.open_loop(left, right)
-        except Exception:
-            logger.exception("[control] error in loop")
-
-        time.sleep(period)
-
-    logger.info("[control] loop stopped")
-
-
-# ============================================================
 # Flask app + globals
 # ============================================================
 
@@ -724,9 +603,9 @@ CORS(app)
 
 cam_cfg = CONFIG.get("camera", {})
 camera = CameraManager(
-    width=cam_cfg.get("width", 640),
-    height=cam_cfg.get("height", 480),
-    fps=cam_cfg.get("fps", 20),
+    width=cam_cfg.get("width", 320),
+    height=cam_cfg.get("height", 240),
+    fps=cam_cfg.get("fps", 15),
 )
 
 motor_cfg = CONFIG.get("motor", {})
@@ -746,10 +625,6 @@ deploy_status = {
     "drive_motors": False,
 }
 _autopilot_thread = None
-
-# start control loop
-_control_thread = threading.Thread(target=_control_loop, daemon=True)
-_control_thread.start()
 
 
 def ok(data=None):
@@ -782,11 +657,13 @@ def api_fs_list():
     for name in sorted(os.listdir(base)):
         full = os.path.join(base, name)
         st = os.stat(full)
-        entries.append({
-            "name": name,
-            "is_dir": os.path.isdir(full),
-            "size": None if os.path.isdir(full) else st.st_size,
-        })
+        entries.append(
+            {
+                "name": name,
+                "is_dir": os.path.isdir(full),
+                "size": None if os.path.isdir(full) else st.st_size,
+            }
+        )
     return ok({"path": rel, "entries": entries})
 
 
@@ -856,15 +733,17 @@ def index():
 
 @app.route("/api/health")
 def api_health():
-    return ok({
-        "camera_on": camera_on,
-        "camera_fps": camera.get_fps(),
-        "camera_backend": camera.backend_name,
-        "motor_backend": motors.backend_name,
-        "time": time.time(),
-        "log_path": log_path,
-        "current_dataset": current_dataset,
-    })
+    return ok(
+        {
+            "camera_on": camera_on,
+            "camera_fps": camera.get_fps(),
+            "camera_backend": camera.backend_name,
+            "motor_backend": motors.backend_name,
+            "time": time.time(),
+            "log_path": log_path,
+            "current_dataset": current_dataset,
+        }
+    )
 
 
 @app.route("/api/camera/start", methods=["POST"])
@@ -894,7 +773,8 @@ def api_camera_frame():
     frame = camera.get_frame()
     if frame is None:
         return err("no frame", 409)
-    ret, jpeg = cv2.imencode(".jpg", frame)
+    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # lower quality for smaller size
+    ret, jpeg = cv2.imencode(".jpg", frame, encode_params)
     if not ret:
         return err("encode failed", 500)
     return Response(jpeg.tobytes(), mimetype="image/jpeg")
@@ -906,19 +786,18 @@ def api_video():
         return err("camera is off", 409)
 
     def generate():
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
         while camera_on:
             frame = camera.get_frame()
             if frame is None:
                 time.sleep(0.01)
                 continue
-            ret, jpeg = cv2.imencode(".jpg", frame)
+            ret, jpeg = cv2.imencode(".jpg", frame, encode_params)
             if not ret:
                 continue
             yield (
                 b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" +
-                jpeg.tobytes() +
-                b"\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
             )
 
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
@@ -934,13 +813,15 @@ def api_camera_settings():
         mode=body.get("mode"),
         gamma=body.get("gamma"),
     )
-    return ok({
-        "vflip": camera.vflip,
-        "hflip": camera.hflip,
-        "gray": camera.gray,
-        "mode": camera.mode,
-        "gamma": camera.gamma,
-    })
+    return ok(
+        {
+            "vflip": camera.vflip,
+            "hflip": camera.hflip,
+            "gray": camera.gray,
+            "mode": camera.mode,
+            "gamma": camera.gamma,
+        }
+    )
 
 
 # ============================================================
@@ -1039,7 +920,7 @@ def api_log_stop():
 
 
 # ============================================================
-# Motor routes (openloop + smooth v,w command)
+# Motor routes (openloop)
 # ============================================================
 
 @app.route("/api/motors/openloop", methods=["POST"])
@@ -1050,20 +931,18 @@ def api_motors_openloop():
         right = float(body.get("right", 0.0))
     except Exception:
         return err("invalid left/right", 400)
-    # manual override: send directly
+
+    # forward-only, clamp to [0, 1]
+    left = max(0.0, min(1.0, left))
+    right = max(0.0, min(1.0, right))
+
     motors.open_loop(left, right)
     return ok({"left": left, "right": right})
 
 
 @app.route("/api/motors/stop", methods=["POST"])
 def api_motors_stop():
-    global target_v, target_w, current_v, current_w, last_cmd_time
     try:
-        target_v = 0.0
-        target_w = 0.0
-        current_v = 0.0
-        current_w = 0.0
-        last_cmd_time = 0.0
         motors.stop()
         return ok({"stopped": True})
     except Exception as e:
@@ -1071,49 +950,8 @@ def api_motors_stop():
         return err(str(e), 500)
 
 
-@app.route("/api/motors/cmd", methods=["POST"])
-def api_motors_cmd():
-    """
-    Set target linear/angular velocity from joystick (raw):
-      body: { "v": float, "w": float }
-
-    These are raw [-1,1] joystick values. We do expo + gains + clamping here.
-    """
-    global target_v, target_w, last_cmd_time
-    body = request.get_json(silent=True) or {}
-    try:
-        v_raw = float(body.get("v", 0.0))
-        w_raw = float(body.get("w", 0.0))
-    except Exception:
-        return err("invalid v/w", 400)
-
-    # clamp raw
-    v_raw = max(-1.0, min(1.0, v_raw))
-    w_raw = max(-1.0, min(1.0, w_raw))
-
-    # local gains / expo for joystick
-    expo_trans = 0.3
-    expo_rot = 0.4
-    joy_cfg = CONFIG.get("joystick", {})
-    speed_gain = float(joy_cfg.get("speed_gain", 1.0))
-    steer_gain = float(joy_cfg.get("steer_gain", 1.0))
-
-    v = _apply_expo(v_raw, expo_trans) * speed_gain
-    w = _apply_expo(w_raw, expo_rot) * steer_gain
-
-    # clamp shaped commands
-    v = max(-1.0, min(1.0, v))
-    w = max(-1.0, min(1.0, w))
-
-    target_v = v
-    target_w = w
-    last_cmd_time = time.time()
-
-    return ok({"v": v, "w": w})
-
-
 # ============================================================
-# Train (stub) + Deploy (stub + autopilot using v,w)
+# Train (stub) + Deploy (stub autopilot)
 # ============================================================
 
 @app.route("/api/train/start", methods=["POST"])
@@ -1154,19 +992,17 @@ def api_train_status():
 
 def _autopilot_loop():
     logger.info("[autopilot] loop started")
-    global target_v, target_w
     while deploy_status["autopilot"]:
-        # Very dumb autopilot: small forward motion only if drive_motors is True
         if deploy_status["drive_motors"]:
-            target_v = 0.2 * deploy_status["gains"].get("throttle_gain", 1.0)
-            target_w = 0.0
+            throttle = 0.3 * deploy_status["gains"].get("throttle_gain", 1.0)
+            throttle = max(0.0, min(1.0, throttle))
+            # forward-only, both wheels same for now
+            motors.open_loop(throttle, throttle)
         else:
-            target_v = 0.0
-            target_w = 0.0
+            motors.open_loop(0.0, 0.0)
         time.sleep(0.1)
-    # stop when leaving
-    target_v = 0.0
-    target_w = 0.0
+
+    motors.open_loop(0.0, 0.0)
     logger.info("[autopilot] loop stopped")
 
 
@@ -1216,11 +1052,6 @@ def api_deploy_gains():
 @atexit.register
 def _cleanup():
     logger.info("Cleanup: shutting down motors and camera...")
-    global _control_running
-    try:
-        _control_running = False
-    except Exception:
-        pass
     try:
         deploy_status["autopilot"] = False
     except Exception:
