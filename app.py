@@ -152,14 +152,14 @@ class CameraManager:
             from picamera2 import Picamera2  # type: ignore
             cam = Picamera2()
             cfg = cam.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "BGR888"},
+                main={"size": (self.width, self.height), "format": "RGB888"},
                 buffer_count=3,
             )
             cam.configure(cfg)
             cam.start()
             self._picam2 = cam
             self._backend = "picamera2"
-            logger.info("Camera: using Picamera2 backend")
+            logger.info("Camera: using Picamera2 backend (RGB888)")
             return True
         except Exception as e:
             logger.info(f"Camera: Picamera2 not available: {e!r}")
@@ -272,11 +272,11 @@ class CameraManager:
     # -------- Grabbing frames --------
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
-            # Picamera2 already gives BGR888 now
+            # Picamera2 gives us RGB, convert to BGR for OpenCV
             arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
-            return arr
+            return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
         if self._cap is not None:
             ok, frame = self._cap.read()
