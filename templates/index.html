@@ -874,7 +874,7 @@
 
       // Map joystick (nx,ny) to throttle/steering
       const throttle = -ny;    // up = forward
-      const steering = nx;     // right = positive steering
+      const steering = -nx;     // right = positive steering
 
       let left = throttle - steering;
       let right = throttle + steering;
