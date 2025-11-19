@@ -953,24 +953,38 @@
         updateJoystick(e, base, handle);
       });
 
-      base.addEventListener("pointerup", async e => {
-        joystickActive = false;
+      base.addEventListener("pointerup", e => {
         base.releasePointerCapture(e.pointerId);
-        resetJoystick();
-        document.getElementById("left").value = "0.0";
-        document.getElementById("right").value = "0.0";
-        lastCmdSend = 0;
-        await fetch("/api/motors/stop", { method: "POST" });
+        hardStopJoystick();
       });
 
-      base.addEventListener("pointercancel", async () => {
-        joystickActive = false;
-        resetJoystick();
-        document.getElementById("left").value = "0.0";
-        document.getElementById("right").value = "0.0";
-        lastCmdSend = 0;
-        await fetch("/api/motors/stop", { method: "POST" });
+      base.addEventListener("pointercancel", e => {
+        base.releasePointerCapture(e.pointerId);
+        hardStopJoystick();
       });
+
+      // If pointer leaves the joystick area while active
+      base.addEventListener("pointerleave", () => {
+        if (joystickActive) {
+          hardStopJoystick();
+        }
+      });
+
+      // If the window loses focus, stop
+      window.addEventListener("blur", () => {
+        if (joystickActive) {
+          hardStopJoystick();
+        }
+      });
+
+      // If tab becomes hidden, stop
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden && joystickActive) {
+          hardStopJoystick();
+        }
+      });
+
+
     }
 
     function resetJoystick() {
@@ -1041,6 +1055,21 @@
       // Send to smooth controller
       sendVW(v, w, false);
     }
+
+    function hardStopJoystick() {
+      joystickActive = false;
+      resetJoystick();
+      document.getElementById("left").value = "0.0";
+      document.getElementById("right").value = "0.0";
+      lastCmdSend = 0;
+
+      // Tell the smooth controller to zero v,w immediately
+      sendVW(0.0, 0.0, true);
+
+      // Also call the stop endpoint to zero currents + motors
+      fetch("/api/motors/stop", { method: "POST" }).catch(() => { });
+    }
+
 
     // ---------- Train tab ----------
     async function refreshTrainDatasets() {

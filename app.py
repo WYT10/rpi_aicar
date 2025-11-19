@@ -276,6 +276,7 @@ class CameraManager:
             arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
+            arr = arr[..., ::-1]
             return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
         if self._cap is not None:
@@ -587,6 +588,9 @@ JOY_MAX_DV = 0.05   # maximum change per tick in v
 JOY_MAX_DW = 0.08   # maximum change per tick in w
 JOY_LOOP_HZ = 50.0
 
+JOY_CMD_TIMEOUT = 0.3  # seconds
+last_cmd_time = 0.0
+
 # global caps from config
 JOY_MAX_SPEED = float(CONFIG.get("joystick", {}).get("max_speed", 0.5))
 JOY_MAX_ROT = float(CONFIG.get("joystick", {}).get("max_rot", 0.8))
@@ -614,12 +618,22 @@ def _control_loop():
     Runs in the background and smoothly moves current_v/current_w
     towards target_v/target_w, then drives the motors.
     """
-    global current_v, current_w
+    global current_v, current_w, target_v, target_w, last_cmd_time
     period = 1.0 / JOY_LOOP_HZ
 
     logger.info("[control] loop started @ %.1f Hz", JOY_LOOP_HZ)
     while _control_running:
         try:
+            now = time.time()
+
+            # If joystick commands have gone stale (e.g., lost pointerup),
+            # force target_v,w to zero. Autopilot keeps updating regularly,
+            # so it won't be affected.
+            if not deploy_status["autopilot"]:
+                if last_cmd_time > 0 and (now - last_cmd_time) > JOY_CMD_TIMEOUT:
+                    target_v = 0.0
+                    target_w = 0.0
+
             dv = target_v - current_v
             dw = target_w - current_w
 
@@ -643,7 +657,6 @@ def _control_loop():
         time.sleep(period)
 
     logger.info("[control] loop stopped")
-
 
 # ============================================================
 # Flask app + globals
@@ -987,12 +1000,13 @@ def api_motors_openloop():
 
 @app.route("/api/motors/stop", methods=["POST"])
 def api_motors_stop():
-    global target_v, target_w, current_v, current_w
+    global target_v, target_w, current_v, current_w, last_cmd_time
     try:
         target_v = 0.0
         target_w = 0.0
         current_v = 0.0
         current_w = 0.0
+        last_cmd_time = 0.0
         motors.stop()
         return ok({"stopped": True})
     except Exception as e:
@@ -1006,7 +1020,7 @@ def api_motors_cmd():
     Set target linear/angular velocity from joystick:
       body: { "v": float, "w": float }
     """
-    global target_v, target_w
+    global target_v, target_w, last_cmd_time
     body = request.get_json(silent=True) or {}
     try:
         v = float(body.get("v", 0.0))
@@ -1019,6 +1033,8 @@ def api_motors_cmd():
 
     target_v = v
     target_w = w
+    last_cmd_time = time.time()
+
     return ok({"v": v, "w": w})
 
 
