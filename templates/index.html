@@ -4,90 +4,205 @@
   <meta charset="utf-8">
   <title>AI Car Studio</title>
   <style>
+    :root {
+      --bg: #050509;
+      --card: #141420;
+      --card-border: #2b2b3a;
+      --accent: #4f7dff;
+      --accent-soft: rgba(79, 125, 255, 0.15);
+      --accent-2: #ff6fb1;
+      --text-main: #f5f5ff;
+      --text-soft: #9ca3c7;
+      --pill-bg: rgba(255,255,255,0.05);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: system-ui, sans-serif;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
       padding: 16px;
-      background: #111;
-      color: #eee;
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text-main);
+      background:
+        radial-gradient(circle at top left, #26245f 0, transparent 55%),
+        radial-gradient(circle at bottom right, #43185c 0, transparent 55%),
+        var(--bg);
     }
+
     h1 {
-      margin-top: 0;
+      margin: 0 0 10px 0;
+      font-size: 24px;
+      letter-spacing: 0.03em;
     }
+
+    h2 {
+      margin-top: 0;
+      font-size: 18px;
+    }
+
+    p {
+      color: var(--text-soft);
+    }
+
+    .app-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(0,0,0,0.3);
+    }
+
     .tabs {
       display: flex;
       gap: 4px;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }
+
     .tab-btn {
-      border: 1px solid #444;
-      background: #222;
-      color: #eee;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-soft);
       padding: 6px 10px;
-      border-radius: 4px 4px 0 0;
+      border-radius: 999px;
       cursor: pointer;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s all ease;
     }
+
+    .tab-btn::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: transparent;
+    }
+
     .tab-btn.active {
-      background: #333;
-      border-bottom-color: #333;
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--text-main);
     }
+
+    .tab-btn.active::before {
+      background: var(--accent);
+    }
+
     .tab-content {
       display: none;
-      border: 1px solid #333;
-      border-radius: 0 4px 4px 4px;
-      padding: 12px;
-      background: #181818;
+      border-radius: 16px;
+      padding: 14px 14px 18px 14px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.04), transparent),
+        var(--card);
+      border: 1px solid var(--card-border);
+      box-shadow:
+        0 20px 40px rgba(0,0,0,0.6),
+        0 0 0 1px rgba(255,255,255,0.02);
+      margin-bottom: 12px;
     }
+
     .tab-content.active {
       display: block;
     }
+
     button {
-      margin: 4px;
+      margin: 3px;
       padding: 6px 10px;
-      border-radius: 4px;
-      border: 1px solid #444;
-      background: #333;
-      color: #eee;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-main);
       cursor: pointer;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: 0.15s all ease;
     }
+
     button:hover {
-      background: #444;
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.18);
     }
-    input[type="number"], input[type="text"] {
-      padding: 2px 4px;
-      border-radius: 4px;
-      border: 1px solid #555;
-      background: #222;
-      color: #eee;
+
+    button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.03), 0 12px 24px rgba(0,0,0,0.7);
     }
+
+    button.primary:hover {
+      filter: brightness(1.08);
+    }
+
+    input[type="number"], input[type="text"], select {
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(8,8,20,0.8);
+      color: var(--text-main);
+      font-size: 13px;
+      outline: none;
+      min-width: 60px;
+    }
+
+    input[type="text"] {
+      width: 160px;
+    }
+
     input[type="checkbox"] {
       margin-right: 4px;
     }
+
     select {
-      padding: 2px 4px;
-      border-radius: 4px;
-      border: 1px solid #555;
-      background: #222;
-      color: #eee;
+      min-width: 120px;
     }
+
+    label {
+      font-size: 13px;
+      color: var(--text-soft);
+    }
+
     #video {
-      border: 1px solid #444;
-      max-width: 100%;
-      border-radius: 4px;
+      border-radius: 12px;
       background: #000;
+      max-width: 100%;
+      border: 1px solid rgba(255,255,255,0.12);
+      box-shadow: 0 14px 30px rgba(0,0,0,0.8);
+      cursor: crosshair;
     }
+
     pre, textarea {
       width: 100%;
       box-sizing: border-box;
-      background: #000;
-      color: #eee;
-      border-radius: 4px;
-      border: 1px solid #333;
+      background: #050510;
+      color: var(--text-main);
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
       padding: 8px;
-      font-family: monospace;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
     }
+
     textarea {
       min-height: 200px;
+      resize: vertical;
     }
+
     .row {
       display: flex;
       flex-wrap: wrap;
@@ -95,35 +210,150 @@
       gap: 8px;
       margin-bottom: 8px;
     }
+
     .fs-list {
-      max-height: 250px;
+      max-height: 260px;
       overflow-y: auto;
-      border: 1px solid #333;
-      border-radius: 4px;
+      border-radius: 10px;
       padding: 4px;
-      background: #000;
+      background: #05050c;
+      border: 1px solid rgba(255,255,255,0.08);
     }
+
     .fs-entry {
       display: flex;
       justify-content: space-between;
-      padding: 2px 4px;
+      padding: 3px 6px;
       cursor: pointer;
+      font-size: 13px;
+      border-radius: 6px;
+      color: var(--text-soft);
     }
+
     .fs-entry:hover {
-      background: #222;
+      background: rgba(255,255,255,0.05);
+      color: var(--text-main);
     }
+
     .pill {
-      display: inline-block;
-      padding: 2px 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
       border-radius: 999px;
-      border: 1px solid #555;
-      font-size: 12px;
-      margin-left: 4px;
+      border: 1px solid rgba(255,255,255,0.16);
+      font-size: 11px;
+      background: var(--pill-bg);
+      color: var(--text-soft);
+    }
+
+    .pill-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #9ca3ff;
+    }
+
+    .pill-ok .pill-dot {
+      background: #4ade80;
+    }
+
+    .pill-bad .pill-dot {
+      background: #f97373;
+    }
+
+    .left-col, .right-col {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .split {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    hr.soft {
+      border: none;
+      border-top: 1px dashed rgba(255,255,255,0.12);
+      margin: 10px 0;
+    }
+
+    /* Joystick */
+    #joystick-wrapper {
+      margin-top: 4px;
+    }
+
+    #joystick-base {
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      position: relative;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), transparent 60%),
+        radial-gradient(circle at 70% 70%, rgba(0,0,0,0.9), #05050c);
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow:
+        0 18px 40px rgba(0,0,0,0.9),
+        0 0 0 1px rgba(0,0,0,0.8);
+      touch-action: none;
+      cursor: grab;
+    }
+
+    #joystick-base::before {
+      content: "";
+      position: absolute;
+      inset: 50%;
+      transform: translate(-50%, -50%);
+      width: 70%;
+      height: 70%;
+      border-radius: 50%;
+      border: 1px dashed rgba(255,255,255,0.12);
+    }
+
+    #joystick-handle {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background:
+        radial-gradient(circle at 30% 20%, #ffffff, #ccccff 30%, #4f7dff 70%);
+      box-shadow:
+        0 10px 20px rgba(0,0,0,0.9),
+        0 0 0 1px rgba(0,0,0,0.9);
+      border: 1px solid rgba(255,255,255,0.7);
+      pointer-events: none;
+    }
+
+    .joystick-caption {
+      font-size: 11px;
+      color: var(--text-soft);
+      margin-top: 4px;
+      max-width: 220px;
+    }
+
+    @media (max-width: 900px) {
+      .split {
+        flex-direction: column;
+      }
     }
   </style>
 </head>
 <body>
-  <h1>AI Car Studio</h1>
+  <div class="app-header">
+    <div>
+      <h1>AI Car Studio</h1>
+      <p style="margin:0;font-size:13px;color:var(--text-soft);">
+        Mini AI car playground – camera, data, training, deploy – all from the browser.
+      </p>
+    </div>
+    <div>
+      <span class="badge">Raspberry Pi • v2 UI</span>
+    </div>
+  </div>
 
   <div class="tabs">
     <button class="tab-btn active" data-tab="file">File</button>
@@ -134,30 +364,36 @@
 
   <!-- FILE TAB -->
   <div id="tab-file" class="tab-content active">
-    <h2>File Manager</h2>
-    <div class="row">
-      <label>Path:
-        <input id="fs-path" type="text" value=".">
-      </label>
-      <button onclick="fsList()">List</button>
-    </div>
-    <div class="row">
-      <button onclick="fsNewFile()">New File</button>
-      <button onclick="fsNewDir()">New Folder</button>
-      <button onclick="fsDelete()">Delete Selected</button>
-      <span id="fs-selected" class="pill">selected: none</span>
-    </div>
-    <div class="row">
-      <div style="flex:1 1 40%;">
+    <div class="split">
+      <div class="left-col">
+        <h2>File Manager</h2>
+        <div class="row">
+          <label>Path:
+            <input id="fs-path" type="text" value=".">
+          </label>
+          <button onclick="fsList()">List</button>
+        </div>
+        <div class="row">
+          <button onclick="fsNewFile()">New File</button>
+          <button onclick="fsNewDir()">New Folder</button>
+          <button onclick="fsDelete()">Delete Selected</button>
+        </div>
+        <div class="row">
+          <span id="fs-selected" class="pill">
+            <span class="pill-dot"></span> selected: none
+          </span>
+        </div>
         <div class="fs-list" id="fs-list"></div>
       </div>
-      <div style="flex:1 1 55%;">
-        <h3>Editor</h3>
+      <div class="right-col">
+        <h2>Editor</h2>
         <div class="row">
-          <span id="fs-edit-path" class="pill">no file</span>
-          <button onclick="fsSave()">Save</button>
+          <span id="fs-edit-path" class="pill">
+            <span class="pill-dot"></span> no file
+          </span>
+          <button class="primary" onclick="fsSave()">Save</button>
         </div>
-        <textarea id="fs-editor" placeholder="Open a file to edit"></textarea>
+        <textarea id="fs-editor" placeholder="Open a file from the list to edit it here"></textarea>
       </div>
     </div>
   </div>
@@ -166,63 +402,105 @@
   <div id="tab-image" class="tab-content">
     <h2>Image & Data</h2>
 
-    <h3>Camera</h3>
-    <div class="row">
-      <button onclick="startCamera()">Start Camera</button>
-      <button onclick="stopCamera()">Stop Camera</button>
-      <button onclick="snapshot()">Snapshot</button>
-      <span id="cam-status" class="pill">Camera: unknown</span>
-    </div>
-    <div class="row">
-      <label><input id="vflip" type="checkbox" onchange="updateProc()">V Flip</label>
-      <label><input id="hflip" type="checkbox" onchange="updateProc()">H Flip</label>
-      <label><input id="gray" type="checkbox" onchange="updateProc()">Gray</label>
-    </div>
-    <div>
-      <img id="video" src="" alt="Camera stream (click to label)">
-    </div>
-    <p>Click on the image to save a labeled frame (x,y) into the current dataset.</p>
+    <div class="split">
+      <div class="left-col">
+        <h3>Camera</h3>
+        <div class="row">
+          <button class="primary" onclick="startCamera()">Start Camera</button>
+          <button onclick="stopCamera()">Stop</button>
+          <button onclick="snapshot()">Snapshot</button>
+          <span id="cam-status" class="pill">
+            <span class="pill-dot pill-bad"></span> Camera: unknown
+          </span>
+        </div>
+        <div class="row">
+          <label><input id="vflip" type="checkbox" onchange="updateProc()">V Flip</label>
+          <label><input id="hflip" type="checkbox" onchange="updateProc()">H Flip</label>
+          <label><input id="gray" type="checkbox" onchange="updateProc()">Gray</label>
+        </div>
+        <div>
+          <img id="video" src="" alt="Camera stream (click to label)">
+        </div>
+        <p style="font-size:12px;margin-top:6px;">
+          Click on the image to save a labeled frame (x,y) into the current dataset.
+        </p>
+      </div>
 
-    <h3>Dataset / Logging</h3>
-    <div class="row">
-      <label>Dataset:
-        <select id="dataset-select"></select>
-      </label>
-      <button onclick="refreshDatasets()">Refresh</button>
-      <input id="dataset-new" type="text" placeholder="new dataset name">
-      <button onclick="createDataset()">Create/Select</button>
-      <span id="dataset-current" class="pill"></span>
-    </div>
-    <div class="row">
-      <h4>Manual Control & Logging</h4>
-    </div>
-    <div class="row">
-      <label>Left:
-        <input id="left" type="number" step="0.1" value="0.0" min="-1" max="1">
-      </label>
-      <label>Right:
-        <input id="right" type="number" step="0.1" value="0.0" min="-1" max="1">
-      </label>
-      <button onclick="sendMotors()">Apply</button>
-      <button onclick="stopMotors()">Stop</button>
-    </div>
-    <div class="row">
-      <label>Log rate (Hz):
-        <input id="log-rate" type="number" step="0.5" value="5">
-      </label>
-      <label>Tag:
-        <input id="log-tag" type="text" value="auto">
-      </label>
-      <button onclick="startLogging()">Start Logging</button>
-      <button onclick="stopLogging()">Stop Logging</button>
-      <span id="log-status" class="pill">logging: off</span>
+      <div class="right-col">
+        <h3>Datasets & Manual Control</h3>
+        <div class="row">
+          <label>Dataset:
+            <select id="dataset-select"></select>
+          </label>
+          <button onclick="refreshDatasets()">Refresh</button>
+        </div>
+        <div class="row">
+          <input id="dataset-new" type="text" placeholder="new dataset name">
+          <button onclick="createDataset()">Create/Select</button>
+          <span id="dataset-current" class="pill">
+            <span class="pill-dot"></span> current: ?
+          </span>
+        </div>
+
+        <hr class="soft">
+
+        <h4>Joystick Drive</h4>
+        <div class="row">
+          <div id="joystick-wrapper">
+            <div id="joystick-base">
+              <div id="joystick-handle"></div>
+            </div>
+            <div class="joystick-caption">
+              Drag inside the circle to drive.
+              <br>Up/down = forward/back, left/right = turn.
+            </div>
+          </div>
+          <div>
+            <div class="row">
+              <label>Left:
+                <input id="left" type="number" step="0.1" value="0.0" min="-1" max="1">
+              </label>
+            </div>
+            <div class="row">
+              <label>Right:
+                <input id="right" type="number" step="0.1" value="0.0" min="-1" max="1">
+              </label>
+            </div>
+            <div class="row">
+              <button onclick="sendMotors()">Apply</button>
+              <button onclick="stopMotors()">Stop</button>
+            </div>
+          </div>
+        </div>
+
+        <hr class="soft">
+
+        <h4>Logging</h4>
+        <div class="row">
+          <label>Log rate (Hz):
+            <input id="log-rate" type="number" step="0.5" value="5">
+          </label>
+          <label>Tag:
+            <input id="log-tag" type="text" value="auto">
+          </label>
+        </div>
+        <div class="row">
+          <button onclick="startLogging()">Start Logging</button>
+          <button onclick="stopLogging()">Stop Logging</button>
+          <span id="log-status" class="pill">
+            <span class="pill-dot"></span> logging: off
+          </span>
+        </div>
+      </div>
     </div>
   </div>
 
   <!-- TRAIN TAB -->
   <div id="tab-train" class="tab-content">
     <h2>Train</h2>
-    <p>Currently this is a stub trainer that simulates training. Later we'll plug in your tiny CNN.</p>
+    <p style="font-size:13px;">
+      Currently this is a stub trainer that simulates training. Later we plug in your tiny CNN for (x,y) regression.
+    </p>
     <div class="row">
       <label>Dataset:
         <select id="train-dataset"></select>
@@ -239,7 +517,7 @@
       <label>Batch size:
         <input id="train-batch" type="number" value="32" min="1">
       </label>
-      <button onclick="startTrain()">Start Training</button>
+      <button class="primary" onclick="startTrain()">Start Training</button>
     </div>
     <pre id="train-status"></pre>
   </div>
@@ -247,10 +525,12 @@
   <!-- DEPLOY TAB -->
   <div id="tab-deploy" class="tab-content">
     <h2>Deploy</h2>
-    <p>Autopilot is currently a stub (no real model yet). It just reads frames and fakes a center prediction.</p>
+    <p style="font-size:13px;">
+      Autopilot is currently a stub (no real model yet). It just reads frames and fakes a center prediction.
+    </p>
     <div class="row">
-      <button onclick="startAutopilot()">Start Autopilot</button>
-      <button onclick="stopAutopilot()">Stop Autopilot</button>
+      <button class="primary" onclick="startAutopilot()">Start Autopilot</button>
+      <button onclick="stopAutopilot()">Stop</button>
       <button onclick="pollDeployStatus()">Refresh Status</button>
     </div>
     <pre id="deploy-status"></pre>
@@ -288,7 +568,7 @@
         div.className = "fs-entry";
         div.onclick = () => fsSelect(path, e);
         const left = document.createElement("span");
-        left.textContent = (e.is_dir ? "[D] " : "[F] ") + e.name;
+        left.textContent = (e.is_dir ? "📁 " : "📄 ") + e.name;
         const right = document.createElement("span");
         right.textContent = e.size != null ? e.size + " B" : "";
         div.appendChild(left);
@@ -302,7 +582,8 @@
       if (full === ".") full = "";
       const rel = (full ? full + "/" : "") + entry.name;
       fsSelectedPath = rel;
-      document.getElementById("fs-selected").textContent = "selected: " + rel;
+      document.getElementById("fs-selected").innerHTML =
+        '<span class="pill-dot pill-ok"></span> selected: ' + rel;
       if (!entry.is_dir) {
         fsOpen(rel);
       }
@@ -315,12 +596,14 @@
         alert("Read error: " + data.error);
         return;
       }
-      document.getElementById("fs-edit-path").textContent = data.data.path;
+      document.getElementById("fs-edit-path").innerHTML =
+        '<span class="pill-dot pill-ok"></span> ' + data.data.path;
       document.getElementById("fs-editor").value = data.data.content;
     }
 
     async function fsSave() {
-      const path = document.getElementById("fs-edit-path").textContent;
+      const pathText = document.getElementById("fs-edit-path").textContent;
+      const path = pathText.replace(/^.*?\s/, ""); // strip pill dot
       if (!path || path === "no file") {
         alert("No file selected");
         return;
@@ -379,7 +662,8 @@
       const data = await res.json();
       if (!data.ok) alert("Error: " + data.error);
       fsSelectedPath = null;
-      document.getElementById("fs-selected").textContent = "selected: none";
+      document.getElementById("fs-selected").innerHTML =
+        '<span class="pill-dot"></span> selected: none';
       fsList();
     }
 
@@ -388,8 +672,8 @@
       const res = await fetch("/api/camera/start", {method: "POST"});
       const data = await res.json();
       if (data.ok) {
-        document.getElementById("cam-status").textContent =
-          "Camera: ON (" + (data.data.backend || "unknown") + ")";
+        document.getElementById("cam-status").innerHTML =
+          '<span class="pill-dot pill-ok"></span> Camera: ON (' + (data.data.backend || "unknown") + ')';
         document.getElementById("video").src = "/api/video?ts=" + Date.now();
       } else {
         alert("Failed to start camera: " + data.error);
@@ -400,7 +684,8 @@
       const res = await fetch("/api/camera/stop", {method: "POST"});
       const data = await res.json();
       if (data.ok) {
-        document.getElementById("cam-status").textContent = "Camera: OFF";
+        document.getElementById("cam-status").innerHTML =
+          '<span class="pill-dot pill-bad"></span> Camera: OFF';
         document.getElementById("video").src = "";
       }
     }
@@ -460,8 +745,8 @@
         if (name === data.data.current) opt.selected = true;
         sel.appendChild(opt);
       });
-      document.getElementById("dataset-current").textContent =
-        "current: " + data.data.current;
+      document.getElementById("dataset-current").innerHTML =
+        '<span class="pill-dot"></span> current: ' + data.data.current;
     }
 
     async function createDataset() {
@@ -486,9 +771,7 @@
       refreshTrainDatasets();
     }
 
-    async function sendMotors() {
-      const left = parseFloat(document.getElementById("left").value);
-      const right = parseFloat(document.getElementById("right").value);
+    async function sendMotorsValues(left, right) {
       await fetch("/api/motors/openloop", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -496,8 +779,17 @@
       });
     }
 
+    async function sendMotors() {
+      const left = parseFloat(document.getElementById("left").value || "0");
+      const right = parseFloat(document.getElementById("right").value || "0");
+      await sendMotorsValues(left, right);
+    }
+
     async function stopMotors() {
       await fetch("/api/motors/stop", {method: "POST"});
+      document.getElementById("left").value = "0.0";
+      document.getElementById("right").value = "0.0";
+      resetJoystick();
     }
 
     async function startLogging() {
@@ -510,8 +802,9 @@
       });
       const data = await res.json();
       if (data.ok) {
-        document.getElementById("log-status").textContent =
-          "logging: on (" + data.data.rate_hz + " Hz, " + data.data.tag + ")";
+        document.getElementById("log-status").innerHTML =
+          '<span class="pill-dot pill-ok"></span> logging: on (' +
+          data.data.rate_hz + ' Hz, ' + data.data.tag + ')';
       } else {
         alert("Log start error: " + data.error);
       }
@@ -519,7 +812,81 @@
 
     async function stopLogging() {
       await fetch("/api/log/stop", {method: "POST"});
-      document.getElementById("log-status").textContent = "logging: off";
+      document.getElementById("log-status").innerHTML =
+        '<span class="pill-dot"></span> logging: off';
+    }
+
+    // ---------- Joystick ----------
+    let joystickActive = false;
+
+    function setupJoystick() {
+      const base = document.getElementById("joystick-base");
+      const handle = document.getElementById("joystick-handle");
+
+      base.addEventListener("pointerdown", e => {
+        joystickActive = true;
+        base.setPointerCapture(e.pointerId);
+        updateJoystick(e, base, handle);
+      });
+
+      base.addEventListener("pointermove", e => {
+        if (!joystickActive) return;
+        updateJoystick(e, base, handle);
+      });
+
+      base.addEventListener("pointerup", e => {
+        joystickActive = false;
+        base.releasePointerCapture(e.pointerId);
+        resetJoystick();
+        sendMotorsValues(0.0, 0.0);
+      });
+
+      base.addEventListener("pointercancel", e => {
+        joystickActive = false;
+        resetJoystick();
+        sendMotorsValues(0.0, 0.0);
+      });
+    }
+
+    function resetJoystick() {
+      const handle = document.getElementById("joystick-handle");
+      handle.style.left = "50%";
+      handle.style.top = "50%";
+    }
+
+    async function updateJoystick(e, base, handle) {
+      const rect = base.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      let dx = e.clientX - cx;
+      let dy = e.clientY - cy;
+      const maxR = rect.width / 2;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist > maxR) {
+        dx *= maxR / dist;
+        dy *= maxR / dist;
+      }
+      const nx = dx / maxR;   // [-1,1]
+      const ny = dy / maxR;   // [-1,1]
+
+      handle.style.left = (50 + (nx * 50)) + "%";
+      handle.style.top  = (50 + (ny * 50)) + "%";
+
+      // Map joystick (nx,ny) to throttle/steering
+      const throttle = -ny;    // up = forward
+      const steering = nx;     // right = positive steering
+
+      let left = throttle - steering;
+      let right = throttle + steering;
+
+      const maxVal = Math.max(1, Math.max(Math.abs(left), Math.abs(right)));
+      left /= maxVal;
+      right /= maxVal;
+
+      document.getElementById("left").value = left.toFixed(2);
+      document.getElementById("right").value = right.toFixed(2);
+
+      await sendMotorsValues(left, right);
     }
 
     // ---------- Train tab ----------
@@ -601,14 +968,16 @@
       fsList();
       refreshDatasets();
       refreshTrainDatasets();
+      setupJoystick();
+
       const res = await fetch("/api/health");
       const data = await res.json();
       if (data.ok) {
-        document.getElementById("dataset-current").textContent =
-          "current: " + data.data.current_dataset;
+        document.getElementById("dataset-current").innerHTML =
+          '<span class="pill-dot"></span> current: ' + data.data.current_dataset;
         if (data.data.camera_on) {
-          document.getElementById("cam-status").textContent =
-            "Camera: ON (" + data.data.camera_backend + ")";
+          document.getElementById("cam-status").innerHTML =
+            '<span class="pill-dot pill-ok"></span> Camera: ON (' + data.data.camera_backend + ')';
           document.getElementById("video").src = "/api/video?ts=" + Date.now();
         }
       }

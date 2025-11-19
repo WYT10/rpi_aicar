@@ -711,7 +711,9 @@ def api_camera_frame():
     frame = camera.get_frame()
     if frame is None:
         return err("no frame", 409)
-    ret, jpeg = cv2.imencode(".jpg", frame)
+    # BGR -> RGB for correct colors in browser
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    ret, jpeg = cv2.imencode(".jpg", frame_rgb)
     if not ret:
         return err("encode failed", 500)
     return Response(jpeg.tobytes(), mimetype="image/jpeg")
@@ -727,7 +729,9 @@ def api_video():
             if frame is None:
                 time.sleep(0.01)
                 continue
-            ret, jpeg = cv2.imencode(".jpg", frame)
+            # BGR -> RGB before encoding
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            ret, jpeg = cv2.imencode(".jpg", frame_rgb)
             if not ret:
                 continue
             yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
