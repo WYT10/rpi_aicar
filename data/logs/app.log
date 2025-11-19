@@ -1,0 +1,91 @@
+2025-11-18 18:42:15,420 [INFO] aicar: Starting AI Car server on 0.0.0.0:8888 ...
+2025-11-18 18:42:15,439 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8888
+ * Running on http://192.168.0.106:8888
+2025-11-18 18:42:15,440 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-11-18 18:42:28,442 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:28] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:33,224 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:33] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:36,506 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:36] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:36,930 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:36] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:37,188 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:37] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:37,366 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:37] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:37,556 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:37] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:37,758 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:37] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:37,944 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:37] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:38,126 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:38] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:38,317 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:38] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:38,501 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:38] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:38,681 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:38] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:38,835 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:38] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:39,008 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:39] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:42:40,240 [INFO] aicar: Camera: starting...
+2025-11-18 18:42:40,256 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:40] "POST /api/camera/start HTTP/1.1" 200 -
+2025-11-18 18:42:41,727 [INFO] aicar: Camera: stopping...
+2025-11-18 18:42:41,730 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:41] "POST /api/camera/stop HTTP/1.1" 200 -
+2025-11-18 18:42:42,370 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:42] "[31m[1mGET /api/camera/frame?ts=1763491362291 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:42,855 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:42] "[31m[1mGET /api/camera/frame?ts=1763491362777 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:43,014 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:43] "[31m[1mGET /api/camera/frame?ts=1763491362939 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:43,179 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:43] "[31m[1mGET /api/camera/frame?ts=1763491363111 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:43,534 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:43] "POST /api/camera/stop HTTP/1.1" 200 -
+2025-11-18 18:42:44,116 [INFO] aicar: Camera: starting...
+2025-11-18 18:42:44,130 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:44] "POST /api/camera/start HTTP/1.1" 200 -
+2025-11-18 18:42:44,490 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:44] "[31m[1mGET /api/camera/frame?ts=1763491364419 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:44,698 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:44] "[31m[1mGET /api/camera/frame?ts=1763491364621 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:44,866 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:44] "[31m[1mGET /api/camera/frame?ts=1763491364798 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:45,058 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:45] "[31m[1mGET /api/camera/frame?ts=1763491364978 HTTP/1.1[0m" 409 -
+2025-11-18 18:42:55,253 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:55] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:55,708 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:55] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:55,906 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:55] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:56,094 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:56] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:56,270 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:56] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:56,512 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:56] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:56,692 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:56] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:56,888 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:56] "GET / HTTP/1.1" 200 -
+2025-11-18 18:42:57,105 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:42:57] "GET / HTTP/1.1" 200 -
+2025-11-18 18:43:00,260 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:43:00] "GET / HTTP/1.1" 200 -
+2025-11-18 18:43:01,140 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:43:01] "GET / HTTP/1.1" 200 -
+2025-11-18 18:47:10,419 [INFO] aicar: Cleaning up...
+2025-11-18 18:47:10,420 [INFO] aicar: [MOTOR dummy] stop
+2025-11-18 18:47:10,420 [INFO] aicar: Camera: stopping...
+2025-11-18 18:47:10,421 [INFO] aicar: Cleanup done.
+2025-11-18 18:47:20,786 [INFO] aicar: AI Car server starting up...
+2025-11-18 18:47:20,808 [INFO] aicar: Starting AI Car server on 0.0.0.0:8888 ...
+2025-11-18 18:47:20,826 [INFO] werkzeug: [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8888
+ * Running on http://192.168.0.106:8888
+2025-11-18 18:47:20,828 [INFO] werkzeug: [33mPress CTRL+C to quit[0m
+2025-11-18 18:48:25,959 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:25] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:26,477 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:26] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:26,667 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:26] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:26,847 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:26] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:27,039 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:27] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:27,229 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:27] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:27,436 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:27] "GET / HTTP/1.1" 200 -
+2025-11-18 18:48:28,259 [INFO] aicar: Camera: starting...
+2025-11-18 18:48:28,277 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:28] "POST /api/camera/start HTTP/1.1" 200 -
+2025-11-18 18:48:29,538 [INFO] aicar: Camera: stopping...
+2025-11-18 18:48:29,541 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:29] "POST /api/camera/stop HTTP/1.1" 200 -
+2025-11-18 18:48:30,004 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:30] "[31m[1mGET /api/camera/frame?ts=1763491709963 HTTP/1.1[0m" 409 -
+2025-11-18 18:48:30,395 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:30] "[31m[1mGET /api/camera/frame?ts=1763491710347 HTTP/1.1[0m" 409 -
+2025-11-18 18:48:31,242 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:31] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:33,890 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:33] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:34,269 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:34] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:34,491 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:34] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:34,686 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:34] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:34,864 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:34] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:35,955 [INFO] aicar: Camera: starting...
+2025-11-18 18:48:35,970 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:35] "POST /api/camera/start HTTP/1.1" 200 -
+2025-11-18 18:48:36,917 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:36] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:40,290 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:40] "POST /api/camera/start HTTP/1.1" 200 -
+2025-11-18 18:48:40,743 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:40] "POST /api/camera/start HTTP/1.1" 200 -
+2025-11-18 18:48:41,752 [INFO] aicar: Camera: stopping...
+2025-11-18 18:48:41,755 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:41] "POST /api/camera/stop HTTP/1.1" 200 -
+2025-11-18 18:48:42,505 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:42] "[31m[1mGET /api/camera/frame?ts=1763491722462 HTTP/1.1[0m" 409 -
+2025-11-18 18:48:43,531 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:43] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:43,888 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:43] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:44,258 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:44] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:44,451 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:44] "GET /api/health HTTP/1.1" 200 -
+2025-11-18 18:48:45,562 [INFO] aicar: [MOTOR dummy] L=+0.00, R=+0.00
+2025-11-18 18:48:45,564 [INFO] werkzeug: 192.168.0.204 - - [18/Nov/2025 18:48:45] "POST /api/motors/openloop HTTP/1.1" 200 -

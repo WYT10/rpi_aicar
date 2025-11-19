@@ -1,0 +1,30 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8888
+  },
+  "camera": {
+    "width": 255,
+    "height": 255,
+    "fps": 20
+  },
+  "motor": {
+    "pins": {
+      "left_forward": 5,
+      "left_backward": 6,
+      "right_forward": 20,
+      "right_backward": 21,
+      "left_pwm": null,
+      "right_pwm": null,
+      "stby": null
+    },
+    "invert_left": true,
+    "invert_right": false,
+    "pwm_freq": 800,
+    "max_duty_pct": 90,
+    "deadzone": 0.03
+  },
+  "paths": {
+    "logs_root": "data/logs"
+  }
+}

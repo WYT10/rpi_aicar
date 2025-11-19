@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Car Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/aicar
+ExecStart=/home/pi/aicar/run.sh
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
