@@ -911,7 +911,7 @@
     }
 
     // ---------- Smooth joystick → (v,w) ----------
-    const JOY_DEADZONE = 0.12;
+    const JOY_DEADZONE = 0.1;
     const CMD_MAX_HZ = 25;
     let lastCmdSend = 0;
 
@@ -1042,15 +1042,17 @@
       v = Math.max(-1, Math.min(1, v));
       w = Math.max(-1, Math.min(1, w));
 
-      // Estimate L/R for UI (same mix as server, ignore caps)
+      // Estimate L/R for UI, match server's no-normalize mix
       let left = v - w;
       let right = v + w;
-      const m = Math.max(1, Math.abs(left), Math.abs(right));
-      left /= m;
-      right /= m;
+
+      // Clamp each wheel individually to [-1, 1] (no shared rescale)
+      left = Math.max(-1, Math.min(1, left));
+      right = Math.max(-1, Math.min(1, right));
 
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
+
 
       // Send to smooth controller
       sendVW(v, w, false);

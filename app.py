@@ -598,20 +598,25 @@ JOY_MAX_ROT = float(CONFIG.get("joystick", {}).get("max_rot", 0.8))
 _control_thread = None
 _control_running = True
 
-
 def vw_to_lr(v: float, w: float, turn_gain: float = 1.0):
     """
-    Map JetBot-style (v, w) into normalized left/right wheel speeds.
+    Map JetBot-style (v, w) into left/right wheel speeds.
 
     v: linear velocity  [-1, 1]
     w: angular velocity [-1, 1]
     turn_gain: how aggressive rotation is relative to forward speed
+
+    We **do not** renormalize both wheels together; we just clamp each wheel
+    individually so small gains stay small.
     """
     left = v - turn_gain * w
     right = v + turn_gain * w
-    m = max(1.0, abs(left), abs(right))
-    return left / m, right / m
 
+    # Clamp each wheel individually to [-1, 1]
+    left = max(-1.0, min(1.0, left))
+    right = max(-1.0, min(1.0, right))
+
+    return left, right
 
 def _control_loop():
     """
