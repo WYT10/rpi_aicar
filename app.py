@@ -16,17 +16,27 @@ from flask_cors import CORS
 # Config + Logging
 # ============================================================
 
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def load_config(path="config.json"):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, "r") as f:
+    cfg_path = os.path.join(ROOT_DIR, path)
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+    with open(cfg_path, "r") as f:
         return json.load(f)
 
 CONFIG = load_config()
 
-# Prepare logs directory
-LOG_ROOT = CONFIG.get("paths", {}).get("logs_root", "data/logs")
+paths_cfg = CONFIG.get("paths", {})
+LOG_ROOT = os.path.join(ROOT_DIR, paths_cfg.get("logs_root", "data/logs"))
+DATASET_ROOT = os.path.join(ROOT_DIR, paths_cfg.get("dataset_root", "data/datasets"))
+MODELS_ROOT = os.path.join(ROOT_DIR, paths_cfg.get("models_root", "data/models"))
+FS_ROOT = os.path.realpath(os.path.join(ROOT_DIR, paths_cfg.get("fs_root", ".")))
+
 os.makedirs(LOG_ROOT, exist_ok=True)
+os.makedirs(DATASET_ROOT, exist_ok=True)
+os.makedirs(MODELS_ROOT, exist_ok=True)
+
 log_path = os.path.join(LOG_ROOT, "app.log")
 
 logging.basicConfig(
@@ -44,8 +54,41 @@ logger.info("AI Car server starting up...")
 
 
 # ============================================================
-# Camera (hybrid backend, threaded)
+# Camera (hybrid backend, threaded) + simple processing
 # ============================================================
+
+class ProcConfig:
+    """Very simple processing config for the Image tab."""
+    def __init__(self):
+        self.vflip = False
+        self.hflip = False
+        self.gray = False
+
+    def to_dict(self):
+        return {"vflip": self.vflip, "hflip": self.hflip, "gray": self.gray}
+
+    def update_from_dict(self, d):
+        if "vflip" in d:
+            self.vflip = bool(d["vflip"])
+        if "hflip" in d:
+            self.hflip = bool(d["hflip"])
+        if "gray" in d:
+            self.gray = bool(d["gray"])
+
+PROC_CFG = ProcConfig()
+
+
+def apply_processing(frame_bgr):
+    """Apply simple operations based on PROC_CFG."""
+    if PROC_CFG.vflip:
+        frame_bgr = cv2.flip(frame_bgr, 0)
+    if PROC_CFG.hflip:
+        frame_bgr = cv2.flip(frame_bgr, 1)
+    if PROC_CFG.gray:
+        g = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        frame_bgr = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
+    return frame_bgr
+
 
 class CameraManager:
     """
@@ -53,13 +96,6 @@ class CameraManager:
       1. Try Picamera2 (RGB888)
       2. Try /dev/video* via OpenCV V4L2
       3. Try GStreamer libcamerasrc → BGR
-
-    Provides:
-      - start()
-      - stop()
-      - get_frame() -> latest BGR frame or None
-      - get_fps()
-      - backend_name
     """
 
     def __init__(self, width=640, height=480, fps=20):
@@ -78,7 +114,6 @@ class CameraManager:
 
         self._fps_hist = deque(maxlen=60)
 
-    # -------- Backend detection helpers --------
     @staticmethod
     def _opencv_supports_gst():
         try:
@@ -89,13 +124,11 @@ class CameraManager:
 
     @staticmethod
     def _list_video_devices():
-        # basic scan for /dev/video*
         import glob
         return sorted(glob.glob("/dev/video*"))
 
-    # -------- Open/close backends --------
     def _open_backend(self):
-        # Try Picamera2 first
+        # 1) Picamera2
         try:
             from picamera2 import Picamera2  # type: ignore
             cam = Picamera2()
@@ -113,7 +146,7 @@ class CameraManager:
             logger.info(f"Camera: Picamera2 not available: {e!r}")
             self._picam2 = None
 
-        # Try V4L2 devices via OpenCV
+        # 2) V4L2
         for dev in self._list_video_devices():
             try:
                 cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
@@ -133,7 +166,7 @@ class CameraManager:
             except Exception as e:
                 logger.info(f"Camera: V4L2 check failed on {dev}: {e!r}")
 
-        # Try GStreamer pipeline if OpenCV has GStreamer
+        # 3) GStreamer
         if self._opencv_supports_gst():
             try:
                 pipeline = (
@@ -154,7 +187,6 @@ class CameraManager:
             except Exception as e:
                 logger.info(f"Camera: GStreamer backend failed: {e!r}")
 
-        # If we reach here, no backend worked
         logger.error("Camera: failed to open any backend")
         return False
 
@@ -177,21 +209,17 @@ class CameraManager:
         logger.info("Camera: backend closed")
         self._backend = None
 
-    # -------- Grabbing frames --------
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
             arr = self._picam2.capture_array("main")  # RGB
             if arr is None:
                 return None
             return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-
         if self._cap is not None:
             ok, frame = self._cap.read()
             return frame if ok else None
-
         return None
 
-    # -------- Public API --------
     def start(self):
         if self._running:
             return
@@ -210,6 +238,8 @@ class CameraManager:
                 time.sleep(0.01)
                 continue
 
+            frame = apply_processing(frame)
+
             now = time.time()
             dt = now - prev
             prev = now
@@ -223,7 +253,6 @@ class CameraManager:
 
     def stop(self):
         self._running = False
-        # give loop a moment to exit
         time.sleep(0.05)
         self._close_backend()
 
@@ -291,7 +320,6 @@ class MotorPigpio(MotorBase):
         self.max_duty = max(0, min(100, int(cfg.get("max_duty_pct", 90))))
         self.deadzone = float(cfg.get("deadzone", 0.03))
 
-        # Setup pins
         for p in [self.LF, self.LB, self.RF, self.RB]:
             self.pi.set_mode(p, pigpio.OUTPUT)
 
@@ -317,7 +345,6 @@ class MotorPigpio(MotorBase):
 
     def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
         v = -value if invert else value
-        # deadzone
         if abs(v) < self.deadzone:
             v = 0.0
         v = max(-1.0, min(1.0, v))
@@ -331,7 +358,6 @@ class MotorPigpio(MotorBase):
         self._drive_channel(self.RP, self.RF, self.RB, right, self.invR)
 
     def stop(self):
-        # zero PWM and direction pins
         self._set_pwm(self.LP, 0)
         self._set_pwm(self.RP, 0)
         for p in [self.LF, self.LB, self.RF, self.RB]:
@@ -441,7 +467,6 @@ class MotorController:
         self.backend = None
         self.backend_name = "dummy"
 
-        # Try pigpio
         try:
             import pigpio  # noqa: F401
             self.backend = MotorPigpio(self.cfg)
@@ -451,7 +476,6 @@ class MotorController:
         except Exception as e:
             logger.info(f"MotorController: pigpio unavailable: {e!r}")
 
-        # Try RPi.GPIO
         try:
             import RPi.GPIO  # noqa: F401
             self.backend = MotorRPiGPIO(self.cfg)
@@ -461,7 +485,6 @@ class MotorController:
         except Exception as e:
             logger.info(f"MotorController: RPi.GPIO unavailable: {e!r}")
 
-        # Fallback dummy
         self.backend = MotorDummy()
         self.backend_name = "dummy"
         logger.info("MotorController using Dummy backend")
@@ -477,13 +500,12 @@ class MotorController:
 
 
 # ============================================================
-# Flask app + WebUI
+# Flask app + Global state
 # ============================================================
 
 app = Flask(__name__, template_folder="templates", static_folder=None)
 CORS(app)
 
-# Singletons
 cam_cfg = CONFIG.get("camera", {})
 camera = CameraManager(
     width=cam_cfg.get("width", 640),
@@ -494,8 +516,7 @@ camera = CameraManager(
 motor_cfg = CONFIG.get("motor", {})
 motors = MotorController(cfg=motor_cfg)
 
-camera_on = False  # app-level state
-
+camera_on = False
 
 def ok(data=None):
     return jsonify({"ok": True, "data": data})
@@ -504,12 +525,152 @@ def err(message, code=400):
     return jsonify({"ok": False, "error": str(message)}), code
 
 
-# ------------- Routes -------------
+# ============================================================
+# File tab helpers (safe FS root)
+# ============================================================
+
+def fs_safe_join(relpath: str) -> str:
+    relpath = relpath.lstrip("/").replace("\\", "/")
+    full = os.path.realpath(os.path.join(FS_ROOT, relpath))
+    if not full.startswith(FS_ROOT):
+        raise ValueError("Path outside allowed root")
+    return full
+
+
+# ============================================================
+# Dataset & logging helpers
+# ============================================================
+
+CURRENT_DATASET = "default"
+os.makedirs(os.path.join(DATASET_ROOT, CURRENT_DATASET), exist_ok=True)
+
+_current_lr = {"left": 0.0, "right": 0.0}
+log_event = threading.Event()
+log_thread = None
+log_rate_hz = 5.0
+log_tag = "runA"
+
+def set_current_lr(l, r):
+    _current_lr["left"] = float(l)
+    _current_lr["right"] = float(r)
+
+def map_lr_to_xy(l, r, size=255):
+    """
+    Simple mapping: left/right in [-1,1] -> XY in [0..size-1]^2.
+    """
+    l = max(-1.0, min(1.0, float(l)))
+    r = max(-1.0, min(1.0, float(r)))
+
+    sx = ((r - l + 2.0) / 4.0) * (size - 1)
+    sy = ((l + r + 2.0) / 4.0) * (size - 1)
+    X = int(np.clip(round(sx), 0, size - 1))
+    Y = int(np.clip(round(sy), 0, size - 1))
+    return X, Y
+
+def save_labeled_frame(frame_bgr, X_label, Y_label, tag="runA"):
+    ts = int(time.time() * 1000)
+    fname = f"x{X_label}_y{Y_label}_{tag}_{ts}.jpg"
+    dpath = os.path.join(DATASET_ROOT, CURRENT_DATASET)
+    os.makedirs(dpath, exist_ok=True)
+    fpath = os.path.join(dpath, fname)
+    cv2.imwrite(fpath, frame_bgr)
+    rel = os.path.relpath(fpath, ROOT_DIR)
+    logger.info(f"Saved labeled frame: {rel}")
+    return rel
+
+def logger_loop():
+    logger.info("Logger loop started")
+    global log_event
+    period = 1.0 / max(1e-3, log_rate_hz)
+    while log_event.is_set():
+        t0 = time.time()
+        frame = camera.get_frame()
+        if frame is not None:
+            X, Y = map_lr_to_xy(_current_lr["left"], _current_lr["right"])
+            save_labeled_frame(frame, X, Y, tag=log_tag)
+        dt = time.time() - t0
+        time.sleep(max(0.0, period - dt))
+    logger.info("Logger loop stopped")
+
+
+# ============================================================
+# Training & deploy stubs
+# ============================================================
+
+train_status = {
+    "running": False,
+    "epoch": 0,
+    "epochs": 0,
+    "loss": None,
+    "note": ""
+}
+train_thread = None
+
+def train_worker(dataset_name, epochs, lr, batch_size):
+    logger.info(f"Training started: dataset={dataset_name}, epochs={epochs}, lr={lr}, batch_size={batch_size}")
+    train_status.update({"running": True, "epoch": 0, "epochs": epochs, "note": "starting"})
+    dpath = os.path.join(DATASET_ROOT, dataset_name)
+    if not os.path.isdir(dpath):
+        train_status.update({"running": False, "note": f"dataset not found: {dataset_name}"})
+        return
+
+    images = [f for f in os.listdir(dpath) if f.lower().endswith(".jpg")]
+    if not images:
+        train_status.update({"running": False, "note": "no images in dataset"})
+        return
+
+    for e in range(1, epochs + 1):
+        time.sleep(0.5)
+        loss = max(0.01, 1.0 / e)
+        train_status.update({
+            "epoch": e,
+            "loss": loss,
+            "note": "training"
+        })
+    train_status.update({"running": False, "note": "done"})
+    logger.info("Training finished")
+
+
+autopilot_event = threading.Event()
+autopilot_thread = None
+autopilot_state = {
+    "running": False,
+    "X": None,
+    "Y": None,
+    "throttle": 0.0,
+    "steering": 0.0,
+    "note": "stub - no model yet"
+}
+
+def autopilot_loop():
+    logger.info("Autopilot loop started")
+    autopilot_state["running"] = True
+    while autopilot_event.is_set():
+        frame = camera.get_frame()
+        if frame is not None:
+            X = 127
+            Y = 127
+            autopilot_state.update({
+                "X": X,
+                "Y": Y,
+                "throttle": 0.0,
+                "steering": 0.0,
+                "note": "stub prediction"
+            })
+        time.sleep(0.1)
+    autopilot_state["running"] = False
+    logger.info("Autopilot loop stopped")
+
+
+# ============================================================
+# Routes
+# ============================================================
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+# ---------- Health ----------
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
@@ -520,8 +681,10 @@ def api_health():
         "motor_backend": motors.backend_name,
         "time": time.time(),
         "log_path": log_path,
+        "current_dataset": CURRENT_DATASET
     })
 
+# ---------- Camera ----------
 
 @app.route("/api/camera/start", methods=["POST"])
 def api_camera_start():
@@ -535,7 +698,6 @@ def api_camera_start():
             return err(str(e), 500)
     return ok({"camera_on": camera_on, "backend": camera.backend_name})
 
-
 @app.route("/api/camera/stop", methods=["POST"])
 def api_camera_stop():
     global camera_on
@@ -543,7 +705,6 @@ def api_camera_stop():
         camera.stop()
         camera_on = False
     return ok({"camera_on": camera_on})
-
 
 @app.route("/api/camera/frame", methods=["GET"])
 def api_camera_frame():
@@ -555,11 +716,8 @@ def api_camera_frame():
         return err("encode failed", 500)
     return Response(jpeg.tobytes(), mimetype="image/jpeg")
 
-
 @app.route("/api/video")
 def api_video():
-    """MJPEG stream endpoint."""
-
     if not camera_on:
         return err("camera is off", 409)
 
@@ -572,16 +730,17 @@ def api_video():
             ret, jpeg = cv2.imencode(".jpg", frame)
             if not ret:
                 continue
-            chunk = (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n" +
-                jpeg.tobytes() +
-                b"\r\n"
-            )
-            yield chunk
-
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" +
+                   jpeg.tobytes() + b"\r\n")
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
+@app.route("/api/camera/settings", methods=["POST"])
+def api_camera_settings():
+    body = request.get_json(silent=True) or {}
+    PROC_CFG.update_from_dict(body)
+    return ok(PROC_CFG.to_dict())
+
+# ---------- Motors ----------
 
 @app.route("/api/motors/openloop", methods=["POST"])
 def api_motors_openloop():
@@ -591,22 +750,256 @@ def api_motors_openloop():
         right = float(body.get("right", 0.0))
     except ValueError:
         return err("invalid left/right", 400)
-
     motors.open_loop(left, right)
+    set_current_lr(left, right)
     return ok({"left": left, "right": right})
-
 
 @app.route("/api/motors/stop", methods=["POST"])
 def api_motors_stop():
     motors.stop()
+    set_current_lr(0.0, 0.0)
     return ok({"stopped": True})
+
+# ---------- Datasets & logging ----------
+
+@app.route("/api/datasets", methods=["GET"])
+def api_list_datasets():
+    names = []
+    if os.path.isdir(DATASET_ROOT):
+        for name in sorted(os.listdir(DATASET_ROOT)):
+            if os.path.isdir(os.path.join(DATASET_ROOT, name)):
+                names.append(name)
+    return ok({"datasets": names, "current": CURRENT_DATASET})
+
+@app.route("/api/datasets/select", methods=["POST"])
+def api_select_dataset():
+    global CURRENT_DATASET
+    body = request.get_json(silent=True) or {}
+    name = body.get("name", "").strip()
+    if not name:
+        return err("dataset name required", 400)
+    dpath = os.path.join(DATASET_ROOT, name)
+    os.makedirs(dpath, exist_ok=True)
+    CURRENT_DATASET = name
+    return ok({"current": CURRENT_DATASET})
+
+@app.route("/api/data/label_click", methods=["POST"])
+def api_label_click():
+    body = request.get_json(silent=True) or {}
+    try:
+        px = float(body["x"])
+        py = float(body["y"])
+        iw = float(body["image_width"])
+        ih = float(body["image_height"])
+    except KeyError as e:
+        return err(f"missing field: {e}", 400)
+    except ValueError:
+        return err("invalid coordinates", 400)
+
+    if not camera_on:
+        return err("camera off", 409)
+    frame = camera.get_frame()
+    if frame is None:
+        return err("no frame", 409)
+
+    X_label = int(np.clip(round(px / max(iw, 1e-6) * 255), 0, 255))
+    Y_label = int(np.clip(round(py / max(ih, 1e-6) * 255), 0, 255))
+    tag = body.get("tag", "click")
+
+    rel = save_labeled_frame(frame, X_label, Y_label, tag=tag)
+    return ok({"file": rel, "X": X_label, "Y": Y_label})
+
+@app.route("/api/log/start", methods=["POST"])
+def api_log_start():
+    global log_thread, log_event, log_rate_hz, log_tag
+    body = request.get_json(silent=True) or {}
+    if not camera_on:
+        return err("camera off", 409)
+    rate = float(body.get("rate_hz", 5.0))
+    tag = str(body.get("tag", "auto"))
+    log_rate_hz = max(0.5, min(60.0, rate))
+    log_tag = tag
+
+    if log_event.is_set():
+        return ok({"msg": "already logging", "rate_hz": log_rate_hz, "tag": log_tag})
+
+    log_event.set()
+    log_thread = threading.Thread(target=logger_loop, daemon=True)
+    log_thread.start()
+    return ok({"msg": "logging started", "rate_hz": log_rate_hz, "tag": log_tag})
+
+@app.route("/api/log/stop", methods=["POST"])
+def api_log_stop():
+    global log_event
+    log_event.clear()
+    time.sleep(0.05)
+    return ok({"msg": "logging stopped"})
+
+# ---------- Train tab ----------
+
+@app.route("/api/train/start", methods=["POST"])
+def api_train_start():
+    global train_thread, train_status
+    if train_status.get("running", False):
+        return err("training already running", 409)
+    body = request.get_json(silent=True) or {}
+    dataset = body.get("dataset", CURRENT_DATASET)
+    epochs = int(body.get("epochs", 10))
+    lr = float(body.get("learning_rate", 1e-3))
+    batch_size = int(body.get("batch_size", 32))
+
+    train_thread = threading.Thread(
+        target=train_worker,
+        args=(dataset, epochs, lr, batch_size),
+        daemon=True
+    )
+    train_thread.start()
+    return ok({"status": "started", "dataset": dataset, "epochs": epochs})
+
+@app.route("/api/train/status", methods=["GET"])
+def api_train_status():
+    return ok(train_status)
+
+# ---------- Deploy tab ----------
+
+@app.route("/api/deploy/start", methods=["POST"])
+def api_deploy_start():
+    global autopilot_thread, autopilot_event
+    if autopilot_event.is_set():
+        return ok({"msg": "autopilot already running"})
+    autopilot_event.set()
+    autopilot_thread = threading.Thread(target=autopilot_loop, daemon=True)
+    autopilot_thread.start()
+    return ok({"msg": "autopilot started"})
+
+@app.route("/api/deploy/stop", methods=["POST"])
+def api_deploy_stop():
+    global autopilot_event
+    autopilot_event.clear()
+    time.sleep(0.05)
+    return ok({"msg": "autopilot stopped"})
+
+@app.route("/api/deploy/status", methods=["GET"])
+def api_deploy_status():
+    return ok(autopilot_state)
+
+# ---------- File tab ----------
+
+@app.route("/api/fs/list", methods=["GET"])
+def api_fs_list():
+    rel = request.args.get("path", "").strip()
+    try:
+        full = fs_safe_join(rel)
+    except ValueError as e:
+        return err(str(e), 400)
+    if not os.path.exists(full):
+        return err("path not found", 404)
+
+    if os.path.isfile(full):
+        return ok({
+            "path": rel,
+            "type": "file",
+            "size": os.path.getsize(full)
+        })
+
+    entries = []
+    for name in sorted(os.listdir(full)):
+        p = os.path.join(full, name)
+        entries.append({
+            "name": name,
+            "is_dir": os.path.isdir(p),
+            "size": os.path.getsize(p) if os.path.isfile(p) else None
+        })
+    return ok({"path": rel, "entries": entries})
+
+@app.route("/api/fs/read", methods=["GET"])
+def api_fs_read():
+    rel = request.args.get("path", "").strip()
+    try:
+        full = fs_safe_join(rel)
+    except ValueError as e:
+        return err(str(e), 400)
+    if not os.path.isfile(full):
+        return err("file not found", 404)
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        return err(str(e), 500)
+    return ok({"path": rel, "content": content})
+
+@app.route("/api/fs/write", methods=["POST"])
+def api_fs_write():
+    body = request.get_json(silent=True) or {}
+    rel = body.get("path", "").strip()
+    content = body.get("content", "")
+    if not rel:
+        return err("path required", 400)
+    try:
+        full = fs_safe_join(rel)
+    except ValueError as e:
+        return err(str(e), 400)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    try:
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        return err(str(e), 500)
+    return ok({"path": rel})
+
+@app.route("/api/fs/mkdir", methods=["POST"])
+def api_fs_mkdir():
+    body = request.get_json(silent=True) or {}
+    rel = body.get("path", "").strip()
+    if not rel:
+        return err("path required", 400)
+    try:
+        full = fs_safe_join(rel)
+    except ValueError as e:
+        return err(str(e), 400)
+    try:
+        os.makedirs(full, exist_ok=True)
+    except Exception as e:
+        return err(str(e), 500)
+    return ok({"path": rel})
+
+@app.route("/api/fs/delete", methods=["POST"])
+def api_fs_delete():
+    body = request.get_json(silent=True) or {}
+    rel = body.get("path", "").strip()
+    if not rel:
+        return err("path required", 400)
+    try:
+        full = fs_safe_join(rel)
+    except ValueError as e:
+        return err(str(e), 400)
+    try:
+        if os.path.isfile(full):
+            os.remove(full)
+        elif os.path.isdir(full):
+            os.rmdir(full)  # non-recursive
+        else:
+            return err("path not found", 404)
+    except OSError as e:
+        return err(f"failed to delete: {e}", 400)
+    except Exception as e:
+        return err(str(e), 500)
+    return ok({"path": rel})
 
 
 # ---------- Cleanup ----------
 
 @atexit.register
 def _cleanup():
-    logger.info("Cleanup: shutting down motors and camera...")
+    logger.info("Cleanup: shutting down motors, camera, logger, autopilot...")
+    try:
+        log_event.clear()
+    except Exception:
+        pass
+    try:
+        autopilot_event.clear()
+    except Exception:
+        pass
     try:
         motors.shutdown()
     except Exception:

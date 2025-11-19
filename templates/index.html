@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>AI Car Studio v1</title>
+  <title>AI Car Studio</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -10,15 +10,35 @@
       background: #111;
       color: #eee;
     }
-    h1, h2 {
+    h1 {
       margin-top: 0;
     }
-    section {
-      margin-bottom: 24px;
-      padding: 12px;
-      border-radius: 8px;
-      background: #1b1b1b;
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+    .tab-btn {
+      border: 1px solid #444;
+      background: #222;
+      color: #eee;
+      padding: 6px 10px;
+      border-radius: 4px 4px 0 0;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #333;
+      border-bottom-color: #333;
+    }
+    .tab-content {
+      display: none;
       border: 1px solid #333;
+      border-radius: 0 4px 4px 4px;
+      padding: 12px;
+      background: #181818;
+    }
+    .tab-content.active {
+      display: block;
     }
     button {
       margin: 4px;
@@ -32,9 +52,17 @@
     button:hover {
       background: #444;
     }
-    input[type="number"] {
-      width: 70px;
-      margin: 0 4px;
+    input[type="number"], input[type="text"] {
+      padding: 2px 4px;
+      border-radius: 4px;
+      border: 1px solid #555;
+      background: #222;
+      color: #eee;
+    }
+    input[type="checkbox"] {
+      margin-right: 4px;
+    }
+    select {
       padding: 2px 4px;
       border-radius: 4px;
       border: 1px solid #555;
@@ -47,69 +75,321 @@
       border-radius: 4px;
       background: #000;
     }
-    pre {
+    pre, textarea {
+      width: 100%;
+      box-sizing: border-box;
       background: #000;
-      padding: 8px;
+      color: #eee;
       border-radius: 4px;
       border: 1px solid #333;
-      max-height: 200px;
-      overflow: auto;
+      padding: 8px;
+      font-family: monospace;
+    }
+    textarea {
+      min-height: 200px;
     }
     .row {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .fs-list {
+      max-height: 250px;
+      overflow-y: auto;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 4px;
+      background: #000;
+    }
+    .fs-entry {
+      display: flex;
+      justify-content: space-between;
+      padding: 2px 4px;
+      cursor: pointer;
+    }
+    .fs-entry:hover {
+      background: #222;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid #555;
+      font-size: 12px;
+      margin-left: 4px;
     }
   </style>
 </head>
 <body>
-  <h1>AI Car Studio v1</h1>
+  <h1>AI Car Studio</h1>
 
-  <section>
-    <h2>Camera</h2>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="file">File</button>
+    <button class="tab-btn" data-tab="image">Image</button>
+    <button class="tab-btn" data-tab="train">Train</button>
+    <button class="tab-btn" data-tab="deploy">Deploy</button>
+  </div>
+
+  <!-- FILE TAB -->
+  <div id="tab-file" class="tab-content active">
+    <h2>File Manager</h2>
+    <div class="row">
+      <label>Path:
+        <input id="fs-path" type="text" value=".">
+      </label>
+      <button onclick="fsList()">List</button>
+    </div>
+    <div class="row">
+      <button onclick="fsNewFile()">New File</button>
+      <button onclick="fsNewDir()">New Folder</button>
+      <button onclick="fsDelete()">Delete Selected</button>
+      <span id="fs-selected" class="pill">selected: none</span>
+    </div>
+    <div class="row">
+      <div style="flex:1 1 40%;">
+        <div class="fs-list" id="fs-list"></div>
+      </div>
+      <div style="flex:1 1 55%;">
+        <h3>Editor</h3>
+        <div class="row">
+          <span id="fs-edit-path" class="pill">no file</span>
+          <button onclick="fsSave()">Save</button>
+        </div>
+        <textarea id="fs-editor" placeholder="Open a file to edit"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMAGE TAB -->
+  <div id="tab-image" class="tab-content">
+    <h2>Image & Data</h2>
+
+    <h3>Camera</h3>
     <div class="row">
       <button onclick="startCamera()">Start Camera</button>
       <button onclick="stopCamera()">Stop Camera</button>
       <button onclick="snapshot()">Snapshot</button>
+      <span id="cam-status" class="pill">Camera: unknown</span>
     </div>
-    <p id="cam-status">Camera: unknown</p>
+    <div class="row">
+      <label><input id="vflip" type="checkbox" onchange="updateProc()">V Flip</label>
+      <label><input id="hflip" type="checkbox" onchange="updateProc()">H Flip</label>
+      <label><input id="gray" type="checkbox" onchange="updateProc()">Gray</label>
+    </div>
     <div>
-      <!-- MJPEG stream -->
-      <img id="video" src="" alt="Camera stream">
+      <img id="video" src="" alt="Camera stream (click to label)">
     </div>
-  </section>
+    <p>Click on the image to save a labeled frame (x,y) into the current dataset.</p>
 
-  <section>
-    <h2>Motors (open-loop)</h2>
+    <h3>Dataset / Logging</h3>
+    <div class="row">
+      <label>Dataset:
+        <select id="dataset-select"></select>
+      </label>
+      <button onclick="refreshDatasets()">Refresh</button>
+      <input id="dataset-new" type="text" placeholder="new dataset name">
+      <button onclick="createDataset()">Create/Select</button>
+      <span id="dataset-current" class="pill"></span>
+    </div>
+    <div class="row">
+      <h4>Manual Control & Logging</h4>
+    </div>
     <div class="row">
       <label>Left:
-        <input id="left" type="number" step="0.1" value="0.0" min="-1.0" max="1.0">
+        <input id="left" type="number" step="0.1" value="0.0" min="-1" max="1">
       </label>
       <label>Right:
-        <input id="right" type="number" step="0.1" value="0.0" min="-1.0" max="1.0">
+        <input id="right" type="number" step="0.1" value="0.0" min="-1" max="1">
       </label>
       <button onclick="sendMotors()">Apply</button>
       <button onclick="stopMotors()">Stop</button>
     </div>
-  </section>
-
-  <section>
-    <h2>Health</h2>
     <div class="row">
-      <button onclick="checkHealth()">Refresh Health</button>
+      <label>Log rate (Hz):
+        <input id="log-rate" type="number" step="0.5" value="5">
+      </label>
+      <label>Tag:
+        <input id="log-tag" type="text" value="auto">
+      </label>
+      <button onclick="startLogging()">Start Logging</button>
+      <button onclick="stopLogging()">Stop Logging</button>
+      <span id="log-status" class="pill">logging: off</span>
     </div>
-    <pre id="health"></pre>
-  </section>
+  </div>
+
+  <!-- TRAIN TAB -->
+  <div id="tab-train" class="tab-content">
+    <h2>Train</h2>
+    <p>Currently this is a stub trainer that simulates training. Later we'll plug in your tiny CNN.</p>
+    <div class="row">
+      <label>Dataset:
+        <select id="train-dataset"></select>
+      </label>
+      <button onclick="refreshTrainDatasets()">Refresh</button>
+    </div>
+    <div class="row">
+      <label>Epochs:
+        <input id="train-epochs" type="number" value="10" min="1">
+      </label>
+      <label>Learning rate:
+        <input id="train-lr" type="text" value="0.001">
+      </label>
+      <label>Batch size:
+        <input id="train-batch" type="number" value="32" min="1">
+      </label>
+      <button onclick="startTrain()">Start Training</button>
+    </div>
+    <pre id="train-status"></pre>
+  </div>
+
+  <!-- DEPLOY TAB -->
+  <div id="tab-deploy" class="tab-content">
+    <h2>Deploy</h2>
+    <p>Autopilot is currently a stub (no real model yet). It just reads frames and fakes a center prediction.</p>
+    <div class="row">
+      <button onclick="startAutopilot()">Start Autopilot</button>
+      <button onclick="stopAutopilot()">Stop Autopilot</button>
+      <button onclick="pollDeployStatus()">Refresh Status</button>
+    </div>
+    <pre id="deploy-status"></pre>
+  </div>
 
   <script>
+    // ---------- Tab switching ----------
+    const tabButtons = document.querySelectorAll(".tab-btn");
+    const tabContents = document.querySelectorAll(".tab-content");
+
+    tabButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const tab = btn.dataset.tab;
+        tabButtons.forEach(b => b.classList.toggle("active", b === btn));
+        tabContents.forEach(c => c.classList.toggle("active", c.id === "tab-" + tab));
+      });
+    });
+
+    // ---------- File tab ----------
+    let fsSelectedPath = null;
+
+    async function fsList() {
+      const path = document.getElementById("fs-path").value;
+      const res = await fetch("/api/fs/list?path=" + encodeURIComponent(path));
+      const data = await res.json();
+      const list = document.getElementById("fs-list");
+      list.innerHTML = "";
+      if (!data.ok) {
+        list.textContent = "Error: " + data.error;
+        return;
+      }
+      const entries = data.data.entries || [];
+      entries.forEach(e => {
+        const div = document.createElement("div");
+        div.className = "fs-entry";
+        div.onclick = () => fsSelect(path, e);
+        const left = document.createElement("span");
+        left.textContent = (e.is_dir ? "[D] " : "[F] ") + e.name;
+        const right = document.createElement("span");
+        right.textContent = e.size != null ? e.size + " B" : "";
+        div.appendChild(left);
+        div.appendChild(right);
+        list.appendChild(div);
+      });
+    }
+
+    function fsSelect(curPath, entry) {
+      let full = curPath;
+      if (full === ".") full = "";
+      const rel = (full ? full + "/" : "") + entry.name;
+      fsSelectedPath = rel;
+      document.getElementById("fs-selected").textContent = "selected: " + rel;
+      if (!entry.is_dir) {
+        fsOpen(rel);
+      }
+    }
+
+    async function fsOpen(path) {
+      const res = await fetch("/api/fs/read?path=" + encodeURIComponent(path));
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Read error: " + data.error);
+        return;
+      }
+      document.getElementById("fs-edit-path").textContent = data.data.path;
+      document.getElementById("fs-editor").value = data.data.content;
+    }
+
+    async function fsSave() {
+      const path = document.getElementById("fs-edit-path").textContent;
+      if (!path || path === "no file") {
+        alert("No file selected");
+        return;
+      }
+      const content = document.getElementById("fs-editor").value;
+      const res = await fetch("/api/fs/write", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path, content})
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Save error: " + data.error);
+      } else {
+        alert("Saved: " + path);
+      }
+    }
+
+    async function fsNewFile() {
+      const path = prompt("New file path (relative to FS root):");
+      if (!path) return;
+      const res = await fetch("/api/fs/write", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path, content: ""})
+      });
+      const data = await res.json();
+      if (!data.ok) alert("Error: " + data.error);
+      fsList();
+    }
+
+    async function fsNewDir() {
+      const path = prompt("New folder path (relative to FS root):");
+      if (!path) return;
+      const res = await fetch("/api/fs/mkdir", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path})
+      });
+      const data = await res.json();
+      if (!data.ok) alert("Error: " + data.error);
+      fsList();
+    }
+
+    async function fsDelete() {
+      if (!fsSelectedPath) {
+        alert("No file/folder selected");
+        return;
+      }
+      if (!confirm("Delete " + fsSelectedPath + " (non-recursive)?")) return;
+      const res = await fetch("/api/fs/delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path: fsSelectedPath})
+      });
+      const data = await res.json();
+      if (!data.ok) alert("Error: " + data.error);
+      fsSelectedPath = null;
+      document.getElementById("fs-selected").textContent = "selected: none";
+      fsList();
+    }
+
+    // ---------- Image tab: camera ----------
     async function startCamera() {
       const res = await fetch("/api/camera/start", {method: "POST"});
       const data = await res.json();
       if (data.ok) {
         document.getElementById("cam-status").textContent =
           "Camera: ON (" + (data.data.backend || "unknown") + ")";
-        // Start MJPEG stream
         document.getElementById("video").src = "/api/video?ts=" + Date.now();
       } else {
         alert("Failed to start camera: " + data.error);
@@ -126,9 +406,84 @@
     }
 
     async function snapshot() {
-      // Get single frame and use it as src once
       const img = document.getElementById("video");
       img.src = "/api/camera/frame?ts=" + Date.now();
+    }
+
+    async function updateProc() {
+      const body = {
+        vflip: document.getElementById("vflip").checked,
+        hflip: document.getElementById("hflip").checked,
+        gray: document.getElementById("gray").checked,
+      };
+      await fetch("/api/camera/settings", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+    }
+
+    document.getElementById("video").addEventListener("click", async (e) => {
+      const img = e.target;
+      if (!img.src) return;
+      const rect = img.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const body = {
+        x, y,
+        image_width: rect.width,
+        image_height: rect.height,
+        tag: "click"
+      };
+      const res = await fetch("/api/data/label_click", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Label save error: " + data.error);
+      }
+    });
+
+    // ---------- Datasets & logging ----------
+    async function refreshDatasets() {
+      const res = await fetch("/api/datasets");
+      const data = await res.json();
+      if (!data.ok) return;
+      const sel = document.getElementById("dataset-select");
+      sel.innerHTML = "";
+      (data.data.datasets || []).forEach(name => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        if (name === data.data.current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      document.getElementById("dataset-current").textContent =
+        "current: " + data.data.current;
+    }
+
+    async function createDataset() {
+      const input = document.getElementById("dataset-new");
+      const name = input.value.trim() || document.getElementById("dataset-select").value;
+      if (!name) {
+        alert("Enter a dataset name or select one");
+        return;
+      }
+      const res = await fetch("/api/datasets/select", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name})
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Error: " + data.error);
+        return;
+      }
+      input.value = "";
+      refreshDatasets();
+      refreshTrainDatasets();
     }
 
     async function sendMotors() {
@@ -145,21 +500,121 @@
       await fetch("/api/motors/stop", {method: "POST"});
     }
 
-    async function checkHealth() {
+    async function startLogging() {
+      const rate_hz = parseFloat(document.getElementById("log-rate").value);
+      const tag = document.getElementById("log-tag").value;
+      const res = await fetch("/api/log/start", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({rate_hz, tag})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        document.getElementById("log-status").textContent =
+          "logging: on (" + data.data.rate_hz + " Hz, " + data.data.tag + ")";
+      } else {
+        alert("Log start error: " + data.error);
+      }
+    }
+
+    async function stopLogging() {
+      await fetch("/api/log/stop", {method: "POST"});
+      document.getElementById("log-status").textContent = "logging: off";
+    }
+
+    // ---------- Train tab ----------
+    async function refreshTrainDatasets() {
+      const res = await fetch("/api/datasets");
+      const data = await res.json();
+      if (!data.ok) return;
+      const sel = document.getElementById("train-dataset");
+      sel.innerHTML = "";
+      (data.data.datasets || []).forEach(name => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        if (name === data.data.current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+
+    async function startTrain() {
+      const dataset = document.getElementById("train-dataset").value;
+      const epochs = parseInt(document.getElementById("train-epochs").value || "10", 10);
+      const learning_rate = parseFloat(document.getElementById("train-lr").value || "0.001");
+      const batch_size = parseInt(document.getElementById("train-batch").value || "32", 10);
+      const res = await fetch("/api/train/start", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({dataset, epochs, learning_rate, batch_size})
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Train start error: " + data.error);
+        return;
+      }
+      pollTrainStatus();
+    }
+
+    async function pollTrainStatus() {
+      const res = await fetch("/api/train/status");
+      const data = await res.json();
+      const el = document.getElementById("train-status");
+      if (!data.ok) {
+        el.textContent = "Error: " + data.error;
+        return;
+      }
+      el.textContent = JSON.stringify(data.data, null, 2);
+      if (data.data.running) {
+        setTimeout(pollTrainStatus, 500);
+      }
+    }
+
+    // ---------- Deploy tab ----------
+    async function startAutopilot() {
+      const res = await fetch("/api/deploy/start", {method: "POST"});
+      const data = await res.json();
+      if (!data.ok) alert("Error: " + data.error);
+      pollDeployStatus();
+    }
+
+    async function stopAutopilot() {
+      const res = await fetch("/api/deploy/stop", {method: "POST"});
+      const data = await res.json();
+      if (!data.ok) alert("Error: " + data.error);
+      pollDeployStatus();
+    }
+
+    async function pollDeployStatus() {
+      const res = await fetch("/api/deploy/status");
+      const data = await res.json();
+      const el = document.getElementById("deploy-status");
+      if (!data.ok) {
+        el.textContent = "Error: " + data.error;
+        return;
+      }
+      el.textContent = JSON.stringify(data.data, null, 2);
+    }
+
+    // ---------- Health (initial bootstrap) ----------
+    async function bootstrap() {
+      fsList();
+      refreshDatasets();
+      refreshTrainDatasets();
       const res = await fetch("/api/health");
       const data = await res.json();
-      document.getElementById("health").textContent = JSON.stringify(data, null, 2);
-      if (data.ok && data.data.camera_on) {
-        document.getElementById("cam-status").textContent =
-          "Camera: ON (" + data.data.camera_backend + ")";
-        if (!document.getElementById("video").src) {
+      if (data.ok) {
+        document.getElementById("dataset-current").textContent =
+          "current: " + data.data.current_dataset;
+        if (data.data.camera_on) {
+          document.getElementById("cam-status").textContent =
+            "Camera: ON (" + data.data.camera_backend + ")";
           document.getElementById("video").src = "/api/video?ts=" + Date.now();
         }
       }
     }
 
-    // Fetch health once at load
-    checkHealth();
+    bootstrap();
   </script>
 </body>
 </html>

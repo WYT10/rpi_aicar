@@ -4,8 +4,8 @@
     "port": 8888
   },
   "camera": {
-    "width": 255,
-    "height": 255,
+    "width": 640,
+    "height": 480,
     "fps": 20
   },
   "motor": {
@@ -25,6 +25,9 @@
     "deadzone": 0.03
   },
   "paths": {
-    "logs_root": "data/logs"
+    "logs_root": "data/logs",
+    "dataset_root": "data/datasets",
+    "models_root": "data/models",
+    "fs_root": "."
   }
 }
