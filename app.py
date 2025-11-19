@@ -58,14 +58,22 @@ logger.info("AI Car server starting up...")
 # ============================================================
 
 class ProcConfig:
-    """Very simple processing config for the Image tab."""
+    """Processing config for the Image tab."""
     def __init__(self):
         self.vflip = False
         self.hflip = False
-        self.gray = False
+        self.gray = False   # kept for backward compatibility
+        self.mode = "raw"   # "raw", "gray", "edges"
+        self.gamma = 1.0    # 0.5 ~ 2.0
 
     def to_dict(self):
-        return {"vflip": self.vflip, "hflip": self.hflip, "gray": self.gray}
+        return {
+            "vflip": self.vflip,
+            "hflip": self.hflip,
+            "gray": self.gray,
+            "mode": self.mode,
+            "gamma": self.gamma,
+        }
 
     def update_from_dict(self, d):
         if "vflip" in d:
@@ -74,19 +82,46 @@ class ProcConfig:
             self.hflip = bool(d["hflip"])
         if "gray" in d:
             self.gray = bool(d["gray"])
+        if "mode" in d:
+            m = str(d["mode"]).lower()
+            if m in ("raw", "gray", "edges"):
+                self.mode = m
+        if "gamma" in d:
+            try:
+                g = float(d["gamma"])
+                self.gamma = max(0.2, min(3.0, g))
+            except Exception:
+                pass
 
 PROC_CFG = ProcConfig()
 
 
 def apply_processing(frame_bgr):
     """Apply simple operations based on PROC_CFG."""
+    # gamma
+    if abs(PROC_CFG.gamma - 1.0) > 1e-3:
+        gamma = PROC_CFG.gamma
+        inv = 1.0 / max(gamma, 1e-6)
+        table = (np.arange(256) / 255.0) ** inv * 255.0
+        table = np.clip(table, 0, 255).astype(np.uint8)
+        frame_bgr = cv2.LUT(frame_bgr, table)
+
+    mode = PROC_CFG.mode
+
+    if PROC_CFG.gray or mode == "gray":
+        g = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        frame_bgr = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
+    elif mode == "edges":
+        g = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(g, 60, 150)
+        frame_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+    # flips at the end
     if PROC_CFG.vflip:
         frame_bgr = cv2.flip(frame_bgr, 0)
     if PROC_CFG.hflip:
         frame_bgr = cv2.flip(frame_bgr, 1)
-    if PROC_CFG.gray:
-        g = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        frame_bgr = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
+
     return frame_bgr
 
 
@@ -639,7 +674,13 @@ autopilot_state = {
     "Y": None,
     "throttle": 0.0,
     "steering": 0.0,
-    "note": "stub - no model yet"
+    "note": "stub - no model yet",
+    "gains": {
+        "throttle_gain": 1.0,
+        "steering_gain": 1.0,
+        "expo": 1.0,
+    },
+    "drive_motors": False,
 }
 
 def autopilot_loop():
@@ -648,19 +689,45 @@ def autopilot_loop():
     while autopilot_event.is_set():
         frame = camera.get_frame()
         if frame is not None:
+            # Stub: pretend model predicts center
             X = 127
             Y = 127
+
+            # Map (X,Y) to steering/throttle in [-1,1] roughly
+            # center (127,127) -> (0,0)
+            sx = (X / 255.0) * 2.0 - 1.0
+            sy = (Y / 255.0) * 2.0 - 1.0
+            steering = sx
+            throttle = -sy
+
+            g = autopilot_state["gains"]
+            expo = max(g.get("expo", 1.0), 1e-6)
+
+            def apply_gain(v, gain):
+                return math.copysign(abs(v) ** expo, v) * gain
+
+            steering_out = apply_gain(steering, g.get("steering_gain", 1.0))
+            throttle_out = apply_gain(throttle, g.get("throttle_gain", 1.0))
+
+            if autopilot_state.get("drive_motors", False):
+                left = throttle_out - steering_out
+                right = throttle_out + steering_out
+                max_val = max(1.0, abs(left), abs(right))
+                left /= max_val
+                right /= max_val
+                motors.open_loop(left, right)
+
             autopilot_state.update({
                 "X": X,
                 "Y": Y,
-                "throttle": 0.0,
-                "steering": 0.0,
-                "note": "stub prediction"
+                "throttle": throttle_out,
+                "steering": steering_out,
+                "note": "stub prediction with gains",
             })
+
         time.sleep(0.1)
     autopilot_state["running"] = False
     logger.info("Autopilot loop stopped")
-
 
 # ============================================================
 # Routes
@@ -886,6 +953,77 @@ def api_deploy_stop():
 @app.route("/api/deploy/status", methods=["GET"])
 def api_deploy_status():
     return ok(autopilot_state)
+
+@app.route("/api/datasets/summary", methods=["GET"])
+def api_dataset_summary():
+    name = request.args.get("name", CURRENT_DATASET).strip()
+    dpath = os.path.join(DATASET_ROOT, name)
+    if not os.path.isdir(dpath):
+        return err(f"dataset not found: {name}", 404)
+
+    xs, ys = [], []
+    count = 0
+
+    for fname in os.listdir(dpath):
+        if not fname.lower().endswith(".jpg"):
+            continue
+        count += 1
+        # Expect filenames like: x{X}_y{Y}_tag_ts.jpg
+        base = os.path.basename(fname)
+        try:
+            parts = base.split("_")
+            x_part = parts[0]  # e.g. 'x123'
+            y_part = parts[1]  # e.g. 'y45'
+            X = int(x_part[1:])
+            Y = int(y_part[1:])
+            xs.append(X)
+            ys.append(Y)
+        except Exception:
+            continue
+
+    if count == 0:
+        return ok({
+            "name": name,
+            "count": 0,
+            "x_min": None,
+            "x_max": None,
+            "x_mean": None,
+            "y_min": None,
+            "y_max": None,
+            "y_mean": None,
+        })
+
+    xs_arr = np.array(xs, dtype=np.float32)
+    ys_arr = np.array(ys, dtype=np.float32)
+
+    summary = {
+        "name": name,
+        "count": int(count),
+        "x_min": int(xs_arr.min()),
+        "x_max": int(xs_arr.max()),
+        "x_mean": float(xs_arr.mean()),
+        "y_min": int(ys_arr.min()),
+        "y_max": int(ys_arr.max()),
+        "y_mean": float(ys_arr.mean()),
+    }
+    return ok(summary)
+
+@app.route("/api/deploy/gains", methods=["POST"])
+def api_deploy_gains():
+    body = request.get_json(silent=True) or {}
+    g = autopilot_state["gains"]
+    for key in ("throttle_gain", "steering_gain", "expo"):
+        if key in body:
+            try:
+                g[key] = float(body[key])
+            except Exception:
+                pass
+    if "drive_motors" in body:
+        autopilot_state["drive_motors"] = bool(body["drive_motors"])
+    return ok({
+        "gains": g,
+        "drive_motors": autopilot_state["drive_motors"],
+    })
 
 # ---------- File tab ----------
 
