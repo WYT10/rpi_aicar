@@ -152,7 +152,7 @@ class CameraManager:
             from picamera2 import Picamera2  # type: ignore
             cam = Picamera2()
             cfg = cam.create_preview_configuration(
-                main={"size": (self.width, self.height), "format": "RGB888"},
+                main={"size": (self.width, self.height), "format": "BGR888"},
                 buffer_count=3,
             )
             cam.configure(cfg)
@@ -272,10 +272,11 @@ class CameraManager:
     # -------- Grabbing frames --------
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
-            arr = self._picam2.capture_array("main")  # RGB
+            # Picamera2 already gives BGR888 now
+            arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
-            return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            return arr
 
         if self._cap is not None:
             ok, frame = self._cap.read()
