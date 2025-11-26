@@ -1204,49 +1204,75 @@
         dy *= maxR / dist;
       }
 
-      // normalised [-1,1]
+      // Normalized joystick coords [-1,1]
       const nx = dx / maxR;   // left/right
       const ny = dy / maxR;   // up/down
 
-      // deadzone
+      // Deadzone on the stick itself
       const mag = Math.sqrt(nx * nx + ny * ny);
       if (mag < JOY_DEADZONE) {
         resetJoystick();
-        sendOpenloop(0, 0);
         document.getElementById("left").value = "0.00";
         document.getElementById("right").value = "0.00";
+        sendOpenloop(0.0, 0.0);
         return;
       }
 
-      // move joystick handle
+      // Move the handle visually
       handle.style.left = (50 + nx * 50) + "%";
       handle.style.top = (50 + ny * 50) + "%";
 
-      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1");
-      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1");
+      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1.0");
+      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1.0");
 
-      // up is forward
-      let throttle = -ny * speedGain;   // [-1,1]
-      let steer = -nx * steerGain;   // [-1,1]
+      // Up is forward. Forward-only (0..1)
+      let forward = -ny * speedGain;        // up = negative ny -> positive forward
+      if (forward < 0) forward = 0;
+      forward = Math.max(0.0, Math.min(1.0, forward));
 
-      // differential mixing
-      let left = throttle + steer;
-      let right = throttle - steer;
+      // Steering in [-1,1]
+      let steer = -nx * steerGain;          // choose sign that feels natural
+      steer = Math.max(-1.0, Math.min(1.0, steer));
 
-      // normalize to [-1,1]
-      const maxMag = Math.max(1, Math.abs(left), Math.abs(right));
-      left /= maxMag;
-      right /= maxMag;
+      let left, right;
 
-      // tiny deadzone clamp
-      if (Math.abs(left) < 0.02) left = 0;
-      if (Math.abs(right) < 0.02) right = 0;
+      // --- Case 1: almost no forward, but strong steering -> pivot-ish turn ---
+      if (forward < 0.05 && Math.abs(steer) > 0.15) {
+        // base turning speed (still 0..1)
+        const baseTurn = Math.min(0.4 + 0.4 * Math.abs(steer), 1.0);
+        if (steer > 0) {
+          // turn right: left wheel moves, right almost stopped
+          left = baseTurn;
+          right = 0.0;
+        } else {
+          // turn left: right wheel moves, left almost stopped
+          left = 0.0;
+          right = baseTurn;
+        }
+      } else {
+        // --- Case 2: normal differential while moving forward ---
+        // simple diff mixing, still within 0..1 after normalization
+        left = forward * (1 - steer);
+        right = forward * (1 + steer);
+
+        // Normalize if needed
+        const maxVal = Math.max(1.0, Math.abs(left), Math.abs(right));
+        left = left / maxVal;
+        right = right / maxVal;
+
+        // Clamp to [0,1] (forward-only system)
+        left = Math.max(0.0, Math.min(1.0, left));
+        right = Math.max(0.0, Math.min(1.0, right));
+      }
+
+      // Tiny deadzone on outputs
+      if (left < 0.02) left = 0.0;
+      if (right < 0.02) right = 0.0;
 
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
 
-      // send to motors (signed)
-      sendOpenloop(left, right);
+      sendOpenloop(left, right);  // stays in [0,1]
     }
 
 
