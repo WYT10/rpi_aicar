@@ -554,18 +554,6 @@
               </span>
             </div>
             <div class="row">
-              <label>Motor loop Hz:
-                <input id="ctrl-hz" type="number" min="1" max="200" step="1" value="50" style="width:70px;">
-              </label>
-              <label>Smoothing α:
-                <input id="ctrl-alpha" type="number" min="0" max="1" step="0.05" value="0.3" style="width:70px;">
-              </label>
-              <button onclick="applyControlParams()">Apply Control</button>
-              <span id="ctrl-status" class="pill">
-                <span class="pill-dot"></span> control
-              </span>
-            </div>
-            <div class="row">
               <button onclick="applyDirectMotors()">Apply (direct)</button>
               <button onclick="stopMotors()">Stop</button>
             </div>
