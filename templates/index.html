@@ -509,12 +509,12 @@
           <div>
             <div class="row">
               <label>Left:
-                <input id="left" type="number" step="0.1" value="0.0" min="0" max="1">
+                <input id="left" type="number" step="0.1" value="0.0" min="-1" max="1">
               </label>
             </div>
             <div class="row">
               <label>Right:
-                <input id="right" type="number" step="0.1" value="0.0" min="0" max="1">
+                <input id="right" type="number" step="0.1" value="0.0" min="-1" max="1">
               </label>
             </div>
 
@@ -1204,50 +1204,51 @@
         dy *= maxR / dist;
       }
 
-      // Normalized joystick coordinates [-1,1]
+      // normalised [-1,1]
       const nx = dx / maxR;   // left/right
       const ny = dy / maxR;   // up/down
 
+      // deadzone
       const mag = Math.sqrt(nx * nx + ny * ny);
       if (mag < JOY_DEADZONE) {
         resetJoystick();
+        sendOpenloop(0, 0);
         document.getElementById("left").value = "0.00";
         document.getElementById("right").value = "0.00";
-        desiredLeft = 0.0;
-        desiredRight = 0.0;
         return;
       }
 
-      // Visual
-      handle.style.left = (50 + (nx * 50)) + "%";
-      handle.style.top = (50 + (ny * 50)) + "%";
+      // move joystick handle
+      handle.style.left = (50 + nx * 50) + "%";
+      handle.style.top = (50 + ny * 50) + "%";
 
-      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1.0");
-      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1.0");
+      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1");
+      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1");
 
-      // Forward component: up is negative ny
-      let v_raw = -ny;                    // [-1,1]
-      v_raw = Math.max(0.0, v_raw);      // forward-only
-      let v = v_raw * speedGain;         // [0,1] scaled
+      // up is forward
+      let throttle = -ny * speedGain;   // [-1,1]
+      let steer = -nx * steerGain;   // [-1,1]
 
-      // Steering component: left/right
-      let s = -nx * steerGain;           // [-1,1] scaled
+      // differential mixing
+      let left = throttle + steer;
+      let right = throttle - steer;
 
-      // Simple differential: left/right = v ± k*s*v
-      const k = 1.0;
-      let left = v * (1 - k * s);
-      let right = v * (1 + k * s);
+      // normalize to [-1,1]
+      const maxMag = Math.max(1, Math.abs(left), Math.abs(right));
+      left /= maxMag;
+      right /= maxMag;
 
-      // Clamp to [0,1]
-      left = Math.max(0.0, Math.min(1.0, left));
-      right = Math.max(0.0, Math.min(1.0, right));
+      // tiny deadzone clamp
+      if (Math.abs(left) < 0.02) left = 0;
+      if (Math.abs(right) < 0.02) right = 0;
 
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
 
-      desiredLeft = left;
-      desiredRight = right;
+      // send to motors (signed)
+      sendOpenloop(left, right);
     }
+
 
     function hardStopJoystick() {
       joystickActive = false;
