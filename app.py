@@ -37,7 +37,8 @@ def load_config(path=CONFIG_PATH):
                     "right_pwm": None,
                     "stby": None,
                 },
-                "invert_left": True,
+                # default: no inversion, easier to reason about
+                "invert_left": False,
                 "invert_right": False,
                 "pwm_freq": 800,
                 "max_duty_pct": 90,
@@ -288,11 +289,10 @@ class CameraManager:
     # -------- Grabbing frames --------
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
-            # Picamera2 already gives us BGR888
             arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
-            # If your camera already returns BGR, you can drop this line.
+            # NOTE: if Picamera2 already returns BGR, you can drop the next line.
             arr = arr[..., ::-1]
             return arr
 
@@ -379,15 +379,13 @@ class MotorBase:
 
 class MotorDummy(MotorBase):
     def set_openloop(self, left: float, right: float):
-        # Debug only; keep quiet for speed
-        # logger.debug(f"[MOTOR dummy] L={left:+.2f} R={right:+.2f}")
         pass
 
     def stop(self):
         logger.info("[MOTOR dummy] stop")
 
     def shutdown(self):
-        logger.info("[MOTOR dummy] shutdown")
+        logger.info("MotorDummy shutdown")
 
 
 class MotorPigpio(MotorBase):
@@ -475,11 +473,6 @@ class MotorPigpio(MotorBase):
             duty = 0.0
 
         self._set_pwm(pwm_pin, duty)
-
-    def set_openloop(self, left: float, right: float):
-        # left/right are now in [-1.0, 1.0]
-        self._drive_channel(self.LP, self.LF, self.LB, left, self.invL)
-        self._drive_channel(self.RP, self.RF, self.RB, right, self.invR)
 
     def set_openloop(self, left: float, right: float):
         self._drive_channel(self.LP, self.LF, self.LB, left, self.invL)
@@ -592,11 +585,6 @@ class MotorRPiGPIO(MotorBase):
         self._set_pwm(pwm_pin, duty)
 
     def set_openloop(self, left: float, right: float):
-        # left/right are now in [-1.0, 1.0]
-        self._drive_channel(self.pwmL, self.LF, self.LB, left, self.invL)
-        self._drive_channel(self.pwmR, self.RF, self.RB, right, self.invR)
-
-    def set_openloop(self, left: float, right: float):
         self._drive_channel(self.pwmL, self.LF, self.LB, left, self.invL)
         self._drive_channel(self.pwmR, self.RF, self.RB, right, self.invR)
 
@@ -682,6 +670,41 @@ motors = MotorController(cfg=motor_cfg)
 
 camera_on = False
 
+# --- motor control state (smooth, prioritized loop) ---
+CONTROL_HZ = 50.0
+CONTROL_ALPHA = 0.3  # smoothing factor (0=very smooth, 1=no smoothing)
+
+control_state = {
+    "left_target": 0.0,
+    "right_target": 0.0,
+    "left_actual": 0.0,
+    "right_actual": 0.0,
+}
+control_lock = threading.Lock()
+
+
+def motor_loop():
+    logger.info("[motor_loop] started at %.1f Hz", CONTROL_HZ)
+    dt = 1.0 / CONTROL_HZ
+    while True:
+        time.sleep(dt)
+        with control_lock:
+            lt = control_state["left_target"]
+            rt = control_state["right_target"]
+            la = control_state["left_actual"]
+            ra = control_state["right_actual"]
+
+        # smooth transitions
+        la = la + CONTROL_ALPHA * (lt - la)
+        ra = ra + CONTROL_ALPHA * (rt - ra)
+
+        motors.open_loop(la, ra)
+
+        with control_lock:
+            control_state["left_actual"] = la
+            control_state["right_actual"] = ra
+
+
 # datasets
 current_dataset = "default"
 os.makedirs(os.path.join(DATASETS_ROOT, current_dataset), exist_ok=True)
@@ -705,7 +728,7 @@ def err(message, code=400):
 
 
 # ============================================================
-# File system API (simple, rooted at project folder)
+# File system API
 # ============================================================
 
 FS_ROOT = ROOT  # you can point this to a subdir if you want
@@ -894,7 +917,7 @@ def api_camera_settings():
 
 
 # ============================================================
-# Data: labeled clicks → dataset images with X,Y in filename
+# Data: labeled clicks
 # ============================================================
 
 def _ensure_dataset(name: str):
@@ -1005,13 +1028,20 @@ def api_motors_openloop():
     left = max(-1.0, min(1.0, left))
     right = max(-1.0, min(1.0, right))
 
-    motors.open_loop(left, right)
+    # Only update targets; motor_loop thread does actual hardware at fixed rate
+    with control_lock:
+        control_state["left_target"] = left
+        control_state["right_target"] = right
+
     return ok({"left": left, "right": right})
 
 
 @app.route("/api/motors/stop", methods=["POST"])
 def api_motors_stop():
     try:
+        with control_lock:
+            control_state["left_target"] = 0.0
+            control_state["right_target"] = 0.0
         motors.stop()
         return ok({"stopped": True})
     except Exception as e:
@@ -1063,15 +1093,28 @@ def _autopilot_loop():
     logger.info("[autopilot] loop started")
     while deploy_status["autopilot"]:
         if deploy_status["drive_motors"]:
-            throttle = 0.3 * deploy_status["gains"].get("throttle_gain", 1.0)
+            throttle_gain = deploy_status["gains"].get("throttle_gain", 1.0)
+            throttle = 0.3 * throttle_gain
             throttle = max(0.0, min(1.0, throttle))
-            # forward-only, both wheels same for now
-            motors.open_loop(throttle, throttle)
+
+            # Straight for now; later plug in (x,y) → steering here
+            left_cmd = throttle
+            right_cmd = throttle
+
+            with control_lock:
+                control_state["left_target"] = left_cmd
+                control_state["right_target"] = right_cmd
         else:
-            motors.open_loop(0.0, 0.0)
+            with control_lock:
+                control_state["left_target"] = 0.0
+                control_state["right_target"] = 0.0
+
         time.sleep(0.1)
 
-    motors.open_loop(0.0, 0.0)
+    # ensure stop at end
+    with control_lock:
+        control_state["left_target"] = 0.0
+        control_state["right_target"] = 0.0
     logger.info("[autopilot] loop stopped")
 
 
@@ -1126,6 +1169,12 @@ def _cleanup():
     except Exception:
         pass
     try:
+        with control_lock:
+            control_state["left_target"] = 0.0
+            control_state["right_target"] = 0.0
+    except Exception:
+        pass
+    try:
         motors.shutdown()
     except Exception:
         pass
@@ -1144,5 +1193,10 @@ if __name__ == "__main__":
     server_cfg = CONFIG.get("server", {})
     host = server_cfg.get("host", "0.0.0.0")
     port = int(server_cfg.get("port", 8888))
+
+    # start motor control loop
+    t_motor = threading.Thread(target=motor_loop, daemon=True)
+    t_motor.start()
+
     logger.info("Starting AI Car server on %s:%d ...", host, port)
     app.run(host=host, port=port, threaded=True)

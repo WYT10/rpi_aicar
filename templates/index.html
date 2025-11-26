@@ -704,19 +704,6 @@
       fsList();
     }
 
-    async function pollHealth() {
-      try {
-        const res = await fetch("/api/health");
-        const data = await res.json();
-        if (data.ok) {
-          document.getElementById("cam-fps").innerText =
-            "FPS: " + data.data.camera_fps.toFixed(1);
-        }
-      } catch (e) { }
-    }
-    setInterval(pollHealth, 1000);
-    pollHealth();
-
     async function fsNewDir() {
       const path = prompt("New folder path (relative to FS root):");
       if (!path) return;
@@ -748,6 +735,20 @@
         '<span class="pill-dot"></span> selected: none';
       fsList();
     }
+
+    // ---------- Health polling (camera FPS badge) ----------
+    async function pollHealth() {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById("cam-fps").innerText =
+            "FPS: " + data.data.camera_fps.toFixed(1);
+        }
+      } catch (e) { }
+    }
+    setInterval(pollHealth, 1000);
+    pollHealth();
 
     // ---------- Image tab: camera ----------
     async function startCamera() {
@@ -882,18 +883,53 @@
       el.textContent = JSON.stringify(data.data, null, 2);
     }
 
-    // ---------- Manual motors (direct openloop from inputs) ----------
+    // ---------- Motor control: debounced sending ----------
+    const JOY_DEADZONE = 0.1;
+    let joystickActive = false;
+
+    let desiredLeft = 0.0;
+    let desiredRight = 0.0;
+    let lastSentLeft = 0.0;
+    let lastSentRight = 0.0;
+    let sendInFlight = false;
+
+    async function sendMotorLoop() {
+      // 20 Hz loop; only sends if there's meaningful change
+      const dl = Math.abs(desiredLeft - lastSentLeft);
+      const dr = Math.abs(desiredRight - lastSentRight);
+      if (dl < 0.01 && dr < 0.01) return;
+      if (sendInFlight) return;
+
+      sendInFlight = true;
+      lastSentLeft = desiredLeft;
+      lastSentRight = desiredRight;
+
+      try {
+        await fetch("/api/motors/openloop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ left: desiredLeft, right: desiredRight })
+        });
+      } catch (e) {
+        // ignore
+      } finally {
+        sendInFlight = false;
+      }
+    }
+
+    // run at ~20 Hz
+    setInterval(sendMotorLoop, 50);
+
     async function applyDirectMotors() {
       const left = parseFloat(document.getElementById("left").value || "0");
       const right = parseFloat(document.getElementById("right").value || "0");
-      await fetch("/api/motors/openloop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ left, right })
-      });
+      desiredLeft = left;
+      desiredRight = right;
     }
 
     async function stopMotors() {
+      desiredLeft = 0.0;
+      desiredRight = 0.0;
       await fetch("/api/motors/stop", { method: "POST" });
       document.getElementById("left").value = "0.0";
       document.getElementById("right").value = "0.0";
@@ -925,10 +961,7 @@
         '<span class="pill-dot"></span> logging: off';
     }
 
-    // ---------- Joystick → left/right forward-only ----------
-    const JOY_DEADZONE = 0.1;
-    let joystickActive = false;
-
+    // ---------- Joystick → left/right forward-only (UI side) ----------
     function setupJoystick() {
       const base = document.getElementById("joystick-base");
       const handle = document.getElementById("joystick-handle");
@@ -979,14 +1012,6 @@
       handle.style.top = "50%";
     }
 
-    async function sendOpenloop(left, right) {
-      await fetch("/api/motors/openloop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ left, right })
-      });
-    }
-
     function updateJoystick(e, base, handle) {
       const rect = base.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
@@ -1011,7 +1036,8 @@
         resetJoystick();
         document.getElementById("left").value = "0.00";
         document.getElementById("right").value = "0.00";
-        sendOpenloop(0.0, 0.0);
+        desiredLeft = 0.0;
+        desiredRight = 0.0;
         return;
       }
 
@@ -1028,7 +1054,7 @@
       let v = v_raw * speedGain;         // [0,1] scaled
 
       // Steering component: left/right
-      let s = -nx * steerGain;            // [-1,1] scaled
+      let s = -nx * steerGain;           // [-1,1] scaled
 
       // Simple differential: left/right = v ± k*s*v
       const k = 1.0;
@@ -1042,7 +1068,8 @@
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
 
-      sendOpenloop(left, right);
+      desiredLeft = left;
+      desiredRight = right;
     }
 
     function hardStopJoystick() {
@@ -1050,7 +1077,8 @@
       resetJoystick();
       document.getElementById("left").value = "0.0";
       document.getElementById("right").value = "0.0";
-      sendOpenloop(0.0, 0.0);
+      desiredLeft = 0.0;
+      desiredRight = 0.0;
     }
 
     // ---------- Train tab ----------
@@ -1190,6 +1218,7 @@
 
     bootstrap();
   </script>
+
 </body>
 
 </html>
