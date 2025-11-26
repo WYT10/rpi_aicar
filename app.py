@@ -671,8 +671,8 @@ motors = MotorController(cfg=motor_cfg)
 camera_on = False
 
 # --- motor control state (smooth, prioritized loop) ---
-CONTROL_HZ = 50.0
-CONTROL_ALPHA = 0.3  # smoothing factor (0=very smooth, 1=no smoothing)
+CONTROL_DEFAULT_HZ = 50.0
+CONTROL_DEFAULT_ALPHA = 0.3  # smoothing factor (0=very smooth, 1=no smoothing)
 
 control_state = {
     "left_target": 0.0,
@@ -682,28 +682,43 @@ control_state = {
 }
 control_lock = threading.Lock()
 
+# tunable control parameters (exposed to web UI)
+control_params = {
+    "hz": CONTROL_DEFAULT_HZ,
+    "alpha": CONTROL_DEFAULT_ALPHA,
+}
 
 def motor_loop():
-    logger.info("[motor_loop] started at %.1f Hz", CONTROL_HZ)
-    dt = 1.0 / CONTROL_HZ
+    logger.info("[motor_loop] started (tunable Hz/alpha)")
     while True:
-        time.sleep(dt)
+        # read parameters and state snapshot
         with control_lock:
+            hz = float(control_params.get("hz", CONTROL_DEFAULT_HZ))
+            alpha = float(control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
+
+            # clamp to safe ranges
+            hz = max(1.0, min(200.0, hz))       # 1..200 Hz
+            alpha = max(0.0, min(1.0, alpha))   # 0..1
+
             lt = control_state["left_target"]
             rt = control_state["right_target"]
             la = control_state["left_actual"]
             ra = control_state["right_actual"]
 
-        # smooth transitions
-        la = la + CONTROL_ALPHA * (lt - la)
-        ra = ra + CONTROL_ALPHA * (rt - ra)
+        dt = 1.0 / hz
+
+        # smooth transitions (first-order filter)
+        la = la + alpha * (lt - la)
+        ra = ra + alpha * (rt - ra)
 
         motors.open_loop(la, ra)
 
+        # write back actuals
         with control_lock:
             control_state["left_actual"] = la
             control_state["right_actual"] = ra
 
+        time.sleep(dt)
 
 # datasets
 current_dataset = "default"
@@ -915,6 +930,65 @@ def api_camera_settings():
         }
     )
 
+@app.route("/api/camera/config", methods=["GET", "POST"])
+def api_camera_config():
+    global camera_on
+
+    if request.method == "GET":
+        return ok(
+            {
+                "width": camera.width,
+                "height": camera.height,
+                "fps": camera.fps,
+                "camera_on": camera_on,
+            }
+        )
+
+    # POST: update (fps and optionally width/height)
+    body = request.get_json(silent=True) or {}
+
+    width = body.get("width", camera.width)
+    height = body.get("height", camera.height)
+    fps = body.get("fps", camera.fps)
+
+    try:
+        width = int(width)
+        height = int(height)
+        fps = int(fps)
+    except Exception:
+        return err("invalid width/height/fps", 400)
+
+    # clamp a bit to keep Pi happy
+    width = max(80, min(1280, width))
+    height = max(60, min(720, height))
+    fps = max(1, min(60, fps))
+
+    # if camera is running, restart with new settings
+    was_on = camera_on
+    if was_on:
+        camera.stop()
+        camera_on = False
+
+    camera.width = width
+    camera.height = height
+    camera.fps = fps
+
+    if was_on:
+        try:
+            camera.start()
+            camera_on = True
+        except Exception as e:
+            logger.exception("Failed to restart camera with new config")
+            return err(str(e), 500)
+
+    return ok(
+        {
+            "width": camera.width,
+            "height": camera.height,
+            "fps": camera.fps,
+            "camera_on": camera_on,
+        }
+    )
 
 # ============================================================
 # Data: labeled clicks
@@ -1014,6 +1088,39 @@ def api_log_stop():
 # ============================================================
 # Motor routes (openloop)
 # ============================================================
+
+@app.route("/api/control/params", methods=["GET", "POST"])
+def api_control_params():
+    global control_params
+    if request.method == "GET":
+        with control_lock:
+            return ok(
+                {
+                    "hz": control_params.get("hz", CONTROL_DEFAULT_HZ),
+                    "alpha": control_params.get("alpha", CONTROL_DEFAULT_ALPHA),
+                }
+            )
+
+    # POST: update
+    body = request.get_json(silent=True) or {}
+    hz = body.get("hz", control_params.get("hz", CONTROL_DEFAULT_HZ))
+    alpha = body.get("alpha", control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
+
+    try:
+        hz = float(hz)
+        alpha = float(alpha)
+    except Exception:
+        return err("invalid hz/alpha", 400)
+
+    # clamp here too
+    hz = max(1.0, min(200.0, hz))
+    alpha = max(0.0, min(1.0, alpha))
+
+    with control_lock:
+        control_params["hz"] = hz
+        control_params["alpha"] = alpha
+
+    return ok({"hz": hz, "alpha": alpha})
 
 @app.route("/api/motors/openloop", methods=["POST"])
 def api_motors_openloop():
