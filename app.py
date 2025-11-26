@@ -437,15 +437,49 @@ class MotorPigpio(MotorBase):
         self.pi.set_PWM_dutycycle(int(pin), int(255 * duty_pct / 100.0))
 
     def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
-        # forward-only: ignore reverse
-        v = -value if invert else value
-        v = max(0.0, min(1.0, v))
-        if v < self.deadzone:
+        """
+        Bidirectional control:
+          - value in [-1.0, 1.0]
+          - sign = direction (forward / reverse)
+          - magnitude = speed
+          - invert flips the sign
+        """
+        v = float(value)
+        # clamp to [-1, 1]
+        if v > 1.0:
+            v = 1.0
+        if v < -1.0:
+            v = -1.0
+
+        if invert:
+            v = -v
+
+        # deadzone
+        if abs(v) < self.deadzone:
             v = 0.0
 
-        self.pi.write(int(fwd_pin), 1 if v > 0 else 0)
-        self.pi.write(int(rev_pin), 0)
-        self._set_pwm(pwm_pin, v * self.max_duty)
+        if v > 0:
+            # forward
+            self.pi.write(int(fwd_pin), 1)
+            self.pi.write(int(rev_pin), 0)
+            duty = v * self.max_duty
+        elif v < 0:
+            # reverse
+            self.pi.write(int(fwd_pin), 0)
+            self.pi.write(int(rev_pin), 1)
+            duty = (-v) * self.max_duty  # use magnitude
+        else:
+            # stop
+            self.pi.write(int(fwd_pin), 0)
+            self.pi.write(int(rev_pin), 0)
+            duty = 0.0
+
+        self._set_pwm(pwm_pin, duty)
+
+    def set_openloop(self, left: float, right: float):
+        # left/right are now in [-1.0, 1.0]
+        self._drive_channel(self.LP, self.LF, self.LB, left, self.invL)
+        self._drive_channel(self.RP, self.RF, self.RB, right, self.invR)
 
     def set_openloop(self, left: float, right: float):
         self._drive_channel(self.LP, self.LF, self.LB, left, self.invL)
@@ -517,15 +551,50 @@ class MotorRPiGPIO(MotorBase):
         pwm.ChangeDutyCycle(duty_pct)
 
     def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
-        # forward-only: ignore reverse
-        v = -value if invert else value
-        v = max(0.0, min(1.0, v))
-        if v < self.deadzone:
+        """
+        Bidirectional control, same behavior as pigpio:
+          - value in [-1.0, 1.0]
+          - sign = direction
+          - invert flips sign
+        """
+        GPIO = self.GPIO
+        v = float(value)
+
+        # clamp to [-1, 1]
+        if v > 1.0:
+            v = 1.0
+        if v < -1.0:
+            v = -1.0
+
+        if invert:
+            v = -v
+
+        # deadzone
+        if abs(v) < self.deadzone:
             v = 0.0
 
-        self.GPIO.output(fwd_pin, self.GPIO.HIGH if v > 0 else self.GPIO.LOW)
-        self.GPIO.output(rev_pin, self.GPIO.LOW)
-        self._set_pwm(pwm_pin, v * self.max_duty)
+        if v > 0:
+            # forward
+            GPIO.output(fwd_pin, GPIO.HIGH)
+            GPIO.output(rev_pin, GPIO.LOW)
+            duty = v * self.max_duty
+        elif v < 0:
+            # reverse
+            GPIO.output(fwd_pin, GPIO.LOW)
+            GPIO.output(rev_pin, GPIO.HIGH)
+            duty = (-v) * self.max_duty
+        else:
+            # stop
+            GPIO.output(fwd_pin, GPIO.LOW)
+            GPIO.output(rev_pin, GPIO.LOW)
+            duty = 0.0
+
+        self._set_pwm(pwm_pin, duty)
+
+    def set_openloop(self, left: float, right: float):
+        # left/right are now in [-1.0, 1.0]
+        self._drive_channel(self.pwmL, self.LF, self.LB, left, self.invL)
+        self._drive_channel(self.pwmR, self.RF, self.RB, right, self.invR)
 
     def set_openloop(self, left: float, right: float):
         self._drive_channel(self.pwmL, self.LF, self.LB, left, self.invL)
@@ -932,9 +1001,9 @@ def api_motors_openloop():
     except Exception:
         return err("invalid left/right", 400)
 
-    # forward-only, clamp to [0, 1]
-    left = max(0.0, min(1.0, left))
-    right = max(0.0, min(1.0, right))
+    # bidirectional: clamp to [-1.0, 1.0]
+    left = max(-1.0, min(1.0, left))
+    right = max(-1.0, min(1.0, right))
 
     motors.open_loop(left, right)
     return ok({"left": left, "right": right})
