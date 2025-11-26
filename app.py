@@ -671,13 +671,16 @@ motors = MotorController(cfg=motor_cfg)
 camera_on = False
 
 # --- motor control state (smooth, prioritized loop) ---
-CONTROL_DEFAULT_HZ = 50.0
-CONTROL_DEFAULT_ALPHA = 0.3  # smoothing factor (0=very smooth, 1=no smoothing)
+CONTROL_DEFAULT_HZ = 100.0       # faster loop for less lag
+CONTROL_DEFAULT_ALPHA = 0.35     # smoothing factor (0=very smooth, 1=no smoothing)
+TRIM_DEFAULT_LEFT = 1.0
+TRIM_DEFAULT_RIGHT = 1.0
+EXPO_DEFAULT_THROTTLE = 1.3      # >1 = softer near center
 
 control_state = {
-    "left_target": 0.0,
-    "right_target": 0.0,
-    "left_actual": 0.0,
+    "left_target": 0.0,   # logical [-1,1]
+    "right_target": 0.0,  # logical [-1,1]
+    "left_actual": 0.0,   # smoothed logical
     "right_actual": 0.0,
 }
 control_lock = threading.Lock()
@@ -686,19 +689,41 @@ control_lock = threading.Lock()
 control_params = {
     "hz": CONTROL_DEFAULT_HZ,
     "alpha": CONTROL_DEFAULT_ALPHA,
+    "left_trim": TRIM_DEFAULT_LEFT,
+    "right_trim": TRIM_DEFAULT_RIGHT,
+    "throttle_expo": EXPO_DEFAULT_THROTTLE,
 }
 
+def _apply_expo(x: float, expo: float) -> float:
+    """
+    Simple expo curve: sign(x) * |x|^expo
+    expo > 1.0  -> softer near center (more gentle control)
+    expo = 1.0  -> linear
+    expo < 1.0  -> aggressive near center (not recommended here)
+    """
+    v = float(x)
+    expo = max(0.1, min(5.0, float(expo)))
+    s = 1.0 if v >= 0 else -1.0
+    return s * (abs(v) ** expo)
+
+
 def motor_loop():
-    logger.info("[motor_loop] started (tunable Hz/alpha)")
+    logger.info("[motor_loop] started (tunable Hz/alpha/trim/expo)")
     while True:
-        # read parameters and state snapshot
+        # snapshot under lock
         with control_lock:
             hz = float(control_params.get("hz", CONTROL_DEFAULT_HZ))
             alpha = float(control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
+            left_trim = float(control_params.get("left_trim", TRIM_DEFAULT_LEFT))
+            right_trim = float(control_params.get("right_trim", TRIM_DEFAULT_RIGHT))
+            throttle_expo = float(control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE))
 
             # clamp to safe ranges
-            hz = max(1.0, min(200.0, hz))       # 1..200 Hz
-            alpha = max(0.0, min(1.0, alpha))   # 0..1
+            hz = max(5.0, min(200.0, hz))           # 5..200 Hz
+            alpha = max(0.0, min(1.0, alpha))       # 0..1
+            left_trim = max(0.5, min(1.5, left_trim))
+            right_trim = max(0.5, min(1.5, right_trim))
+            throttle_expo = max(0.5, min(3.0, throttle_expo))
 
             lt = control_state["left_target"]
             rt = control_state["right_target"]
@@ -707,13 +732,21 @@ def motor_loop():
 
         dt = 1.0 / hz
 
-        # smooth transitions (first-order filter)
+        # smooth transitions in logical space
         la = la + alpha * (lt - la)
         ra = ra + alpha * (rt - ra)
 
-        motors.open_loop(la, ra)
+        # apply expo + trim just before sending to motors
+        la_cmd = _apply_expo(la, throttle_expo) * left_trim
+        ra_cmd = _apply_expo(ra, throttle_expo) * right_trim
 
-        # write back actuals
+        # clamp final outputs to [-1,1]
+        la_cmd = max(-1.0, min(1.0, la_cmd))
+        ra_cmd = max(-1.0, min(1.0, ra_cmd))
+
+        motors.open_loop(la_cmd, ra_cmd)
+
+        # write back smoothed logical values (not trimmed)
         with control_lock:
             control_state["left_actual"] = la
             control_state["right_actual"] = ra
@@ -1098,29 +1131,53 @@ def api_control_params():
                 {
                     "hz": control_params.get("hz", CONTROL_DEFAULT_HZ),
                     "alpha": control_params.get("alpha", CONTROL_DEFAULT_ALPHA),
+                    "left_trim": control_params.get("left_trim", TRIM_DEFAULT_LEFT),
+                    "right_trim": control_params.get("right_trim", TRIM_DEFAULT_RIGHT),
+                    "throttle_expo": control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE),
                 }
             )
 
     # POST: update
     body = request.get_json(silent=True) or {}
+
     hz = body.get("hz", control_params.get("hz", CONTROL_DEFAULT_HZ))
     alpha = body.get("alpha", control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
+    left_trim = body.get("left_trim", control_params.get("left_trim", TRIM_DEFAULT_LEFT))
+    right_trim = body.get("right_trim", control_params.get("right_trim", TRIM_DEFAULT_RIGHT))
+    throttle_expo = body.get("throttle_expo", control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE))
 
     try:
         hz = float(hz)
         alpha = float(alpha)
+        left_trim = float(left_trim)
+        right_trim = float(right_trim)
+        throttle_expo = float(throttle_expo)
     except Exception:
-        return err("invalid hz/alpha", 400)
+        return err("invalid control params", 400)
 
-    # clamp here too
-    hz = max(1.0, min(200.0, hz))
+    # clamp
+    hz = max(5.0, min(200.0, hz))
     alpha = max(0.0, min(1.0, alpha))
+    left_trim = max(0.5, min(1.5, left_trim))
+    right_trim = max(0.5, min(1.5, right_trim))
+    throttle_expo = max(0.5, min(3.0, throttle_expo))
 
     with control_lock:
         control_params["hz"] = hz
         control_params["alpha"] = alpha
+        control_params["left_trim"] = left_trim
+        control_params["right_trim"] = right_trim
+        control_params["throttle_expo"] = throttle_expo
 
-    return ok({"hz": hz, "alpha": alpha})
+    return ok(
+        {
+            "hz": hz,
+            "alpha": alpha,
+            "left_trim": left_trim,
+            "right_trim": right_trim,
+            "throttle_expo": throttle_expo,
+        }
+    )
 
 @app.route("/api/motors/openloop", methods=["POST"])
 def api_motors_openloop():
@@ -1135,7 +1192,6 @@ def api_motors_openloop():
     left = max(-1.0, min(1.0, left))
     right = max(-1.0, min(1.0, right))
 
-    # Only update targets; motor_loop thread does actual hardware at fixed rate
     with control_lock:
         control_state["left_target"] = left
         control_state["right_target"] = right

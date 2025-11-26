@@ -527,6 +527,33 @@
               </label>
             </div>
             <div class="row">
+              <label>Loop Hz:
+                <input id="ctrl-hz" type="number" min="5" max="200" step="5" value="100" style="width:70px;">
+              </label>
+              <label>α (smooth):
+                <input id="ctrl-alpha" type="number" min="0" max="1" step="0.05" value="0.35" style="width:70px;">
+              </label>
+            </div>
+            <div class="row">
+              <label>Left trim:
+                <input id="ctrl-left-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00"
+                  style="width:70px;">
+              </label>
+              <label>Right trim:
+                <input id="ctrl-right-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00"
+                  style="width:70px;">
+              </label>
+            </div>
+            <div class="row">
+              <label>Throttle expo:
+                <input id="ctrl-expo" type="number" min="0.5" max="3.0" step="0.1" value="1.3" style="width:70px;">
+              </label>
+              <button onclick="applyControlParams()">Apply Control</button>
+              <span id="ctrl-status" class="pill">
+                <span class="pill-dot"></span> control cfg
+              </span>
+            </div>
+            <div class="row">
               <label>Motor loop Hz:
                 <input id="ctrl-hz" type="number" min="1" max="200" step="1" value="50" style="width:70px;">
               </label>
@@ -1023,15 +1050,28 @@
         const data = await res.json();
         if (!data.ok) return;
         const p = data.data;
+
         const hzInput = document.getElementById("ctrl-hz");
         const aInput = document.getElementById("ctrl-alpha");
-        if (hzInput) hzInput.value = p.hz ?? 50;
-        if (aInput) aInput.value = p.alpha ?? 0.3;
+        const lInput = document.getElementById("ctrl-left-trim");
+        const rInput = document.getElementById("ctrl-right-trim");
+        const eInput = document.getElementById("ctrl-expo");
+
+        if (hzInput) hzInput.value = p.hz ?? 100;
+        if (aInput) aInput.value = p.alpha ?? 0.35;
+        if (lInput) lInput.value = p.left_trim ?? 1.0;
+        if (rInput) rInput.value = p.right_trim ?? 1.0;
+        if (eInput) eInput.value = p.throttle_expo ?? 1.3;
+
         const status = document.getElementById("ctrl-status");
         if (status) {
           status.innerHTML =
             '<span class="pill-dot"></span> ' +
-            'Hz: ' + (p.hz ?? "--") + ', α: ' + (p.alpha ?? "--");
+            'Hz ' + (p.hz ?? "--") +
+            ' • α ' + (p.alpha ?? "--") +
+            ' • L ' + (p.left_trim ?? "--") +
+            ' • R ' + (p.right_trim ?? "--") +
+            ' • expo ' + (p.throttle_expo ?? "--");
         }
       } catch (e) {
         // ignore
@@ -1041,12 +1081,19 @@
     async function applyControlParams() {
       const hzInput = document.getElementById("ctrl-hz");
       const aInput = document.getElementById("ctrl-alpha");
-      if (!hzInput || !aInput) return;
+      const lInput = document.getElementById("ctrl-left-trim");
+      const rInput = document.getElementById("ctrl-right-trim");
+      const eInput = document.getElementById("ctrl-expo");
 
-      let hz = parseFloat(hzInput.value || "50");
-      let alpha = parseFloat(aInput.value || "0.3");
+      if (!hzInput || !aInput || !lInput || !rInput || !eInput) return;
 
-      if (!hz || hz <= 0) hz = 50;
+      let hz = parseFloat(hzInput.value || "100");
+      let alpha = parseFloat(aInput.value || "0.35");
+      let left_trim = parseFloat(lInput.value || "1.0");
+      let right_trim = parseFloat(rInput.value || "1.0");
+      let throttle_expo = parseFloat(eInput.value || "1.3");
+
+      if (!hz || hz <= 0) hz = 100;
       if (alpha < 0) alpha = 0;
       if (alpha > 1) alpha = 1;
 
@@ -1054,7 +1101,7 @@
         const res = await fetch("/api/control/params", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ hz, alpha })
+          body: JSON.stringify({ hz, alpha, left_trim, right_trim, throttle_expo })
         });
         const data = await res.json();
         if (!data.ok) {
@@ -1066,7 +1113,11 @@
         if (status) {
           status.innerHTML =
             '<span class="pill-dot pill-ok"></span> ' +
-            'Hz: ' + p.hz + ', α: ' + p.alpha;
+            'Hz ' + p.hz +
+            ' • α ' + p.alpha +
+            ' • L ' + p.left_trim +
+            ' • R ' + p.right_trim +
+            ' • expo ' + p.throttle_expo;
         }
       } catch (e) {
         alert("Control update error: " + e);
@@ -1340,8 +1391,8 @@
       refreshDatasets();
       refreshTrainDatasets();
       setupJoystick();
-      loadCameraConfig();      // new
-      loadControlParams();     // new
+      loadControlParams();
+      loadCameraConfig();
 
       const res = await fetch("/api/health");
       const data = await res.json();
