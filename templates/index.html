@@ -372,6 +372,7 @@
     </div>
     <div>
       <span class="badge">Raspberry Pi • v2 UI</span>
+      <span id="cam-fps" class="pill-like-metric">FPS: --</span>
     </div>
   </div>
 
@@ -702,6 +703,19 @@
       if (!data.ok) alert("Error: " + data.error);
       fsList();
     }
+
+    async function pollHealth() {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        if (data.ok) {
+          document.getElementById("cam-fps").innerText =
+            "FPS: " + data.data.camera_fps.toFixed(1);
+        }
+      } catch (e) { }
+    }
+    setInterval(pollHealth, 1000);
+    pollHealth();
 
     async function fsNewDir() {
       const path = prompt("New folder path (relative to FS root):");
