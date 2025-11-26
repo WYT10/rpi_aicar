@@ -1,264 +1,183 @@
 #!/usr/bin/env python3
 """
-Simple terminal UI to test AI car hardware:
+Very simple validation script for AI car:
 
-- Motors: left / right / both
-- Motion patterns: forward, spin in place
-- Camera: backend + live FPS readout
+- Motor tests: left / right / both
+- Manual motor values
+- Camera FPS for a short period
 
-Run on the Pi inside your project folder:
-
-    python3 diagnostics_cli.py
+No extra helper functions, everything is inline.
 """
 
 import time
 import sys
 
-# Import your existing classes from app.py
-from app import CameraManager, MotorController, CONFIG  # type: ignore
+# Use your existing project classes / config
+from app import MotorController, CameraManager, CONFIG  # type: ignore
 
+print("=== AI CAR VALIDATION SCRIPT ===")
 
-def make_camera():
-    cam_cfg = CONFIG.get("camera", {})
-    cam = CameraManager(
-        width=cam_cfg.get("width", 320),
-        height=cam_cfg.get("height", 240),
-        fps=cam_cfg.get("fps", 15),
-    )
-    return cam
+# ----- Create motor controller -----
+print("\n[STEP] Initializing motors from CONFIG...")
+motor_cfg = CONFIG.get("motor", {})
+motors = MotorController(cfg=motor_cfg)
+print(f"[INFO] Motor backend: {motors.backend_name}")
+print(f"[INFO] Motor pins from config: {motor_cfg.get('pins')}")
 
-
-def make_motors():
-    motor_cfg = CONFIG.get("motor", {})
-    m = MotorController(cfg=motor_cfg)
-    print(f"[INFO] Motor backend: {m.backend_name}")
-    return m
-
-
-def pause(msg="Press ENTER to continue..."):
-    input(msg)
-
-
-# ---------------- Motor tests ----------------
-
-
-def test_motor_single_side(motors):
-    """
-    Test left and right channels separately.
-    """
-    try:
-        power = float(input("Enter test power (0.0–1.0, e.g. 0.4): ").strip() or "0.4")
-    except ValueError:
-        print("Invalid, using 0.4")
+# Ask test power
+try:
+    power_str = input("\nEnter test power for motors (0.0–1.0, default 0.4): ").strip()
+    if power_str == "":
         power = 0.4
-
-    duration = 1.5
-    print("\n[TEST] LEFT motor only...")
-    motors.open_loop(power, 0.0)
-    time.sleep(duration)
-    motors.open_loop(0.0, 0.0)
-    print("[INFO] LEFT test done.\n")
-    pause()
-
-    print("\n[TEST] RIGHT motor only...")
-    motors.open_loop(0.0, power)
-    time.sleep(duration)
-    motors.open_loop(0.0, 0.0)
-    print("[INFO] RIGHT test done.\n")
-    pause()
-
-    print("\n[TEST] BOTH motors...")
-    motors.open_loop(power, power)
-    time.sleep(duration)
-    motors.open_loop(0.0, 0.0)
-    print("[INFO] BOTH test done.\n")
-    pause()
-
-
-def test_motion_patterns(motors):
-    """
-    Simple patterns to see if the car moves correctly:
-      - forward
-      - spin left
-      - spin right
-    """
-    try:
-        power = float(input("Enter base power (0.0–1.0, e.g. 0.4): ").strip() or "0.4")
-    except ValueError:
-        print("Invalid, using 0.4")
-        power = 0.4
-
-    dur = 1.5
-
-    print("\n[PATTERN] Forward:")
-    motors.open_loop(power, power)
-    time.sleep(dur)
-    motors.open_loop(0.0, 0.0)
-    pause("Forward done. Press ENTER for spin-left...")
-
-    print("\n[PATTERN] Spin LEFT (right wheel forward, left off):")
-    motors.open_loop(0.0, power)
-    time.sleep(dur)
-    motors.open_loop(0.0, 0.0)
-    pause("Spin-left done. Press ENTER for spin-right...")
-
-    print("\n[PATTERN] Spin RIGHT (left wheel forward, right off):")
-    motors.open_loop(power, 0.0)
-    time.sleep(dur)
-    motors.open_loop(0.0, 0.0)
-    pause("Spin-right done. Press ENTER to continue...")
-
-
-def manual_motor_control(motors):
-    """
-    Manual numeric control loop.
-    Useful to debug asymmetry or offsets.
-    """
-    print("\n[MANUAL] Enter left/right values in [0.0, 1.0]. Empty to stop.")
-    print("Example: 0.3 0.3  (both forward)\n")
-
-    while True:
-        line = input("left right > ").strip()
-        if not line:
-            break
-        try:
-            parts = line.split()
-            if len(parts) != 2:
-                print("Please enter two numbers: left right")
-                continue
-            left = float(parts[0])
-            right = float(parts[1])
-        except ValueError:
-            print("Invalid numbers.")
-            continue
-
-        # clamp
-        left = max(0.0, min(1.0, left))
-        right = max(0.0, min(1.0, right))
-
-        print(f"[CMD] open_loop(left={left:.2f}, right={right:.2f})")
-        motors.open_loop(left, right)
-
-    motors.open_loop(0.0, 0.0)
-    print("[MANUAL] Stopped motors.")
-
-
-# ---------------- Camera tests ----------------
-
-
-def test_camera_fps(camera):
-    """
-    Start camera and print backend + FPS for a few seconds.
-    """
-    print("\n[CAM] Starting camera...")
-    try:
-        camera.start()
-    except Exception as e:
-        print(f"[ERROR] Failed to start camera: {e}")
-        pause()
-        return
-
-    print(f"[CAM] Backend: {camera.backend_name}")
-    print("[CAM] Measuring FPS for ~10 seconds...\n")
-    t0 = time.time()
-    last_print = t0
-
-    try:
-        while time.time() - t0 < 10.0:
-            # just grab frame to keep pipeline active
-            _ = camera.get_frame()
-            now = time.time()
-            if now - last_print >= 1.0:
-                fps = camera.get_fps()
-                print(f"  [{now - t0:4.1f}s] camera_fps = {fps:.2f}")
-                last_print = now
-            time.sleep(0.01)
-    finally:
-        print("\n[CAM] Stopping camera...")
-        camera.stop()
-        pause()
-
-
-def camera_single_snapshot(camera):
-    """
-    Grab a single frame and print its shape and current FPS.
-    """
-    print("\n[CAM] Starting camera for one snapshot...")
-    try:
-        camera.start()
-    except Exception as e:
-        print(f"[ERROR] Failed to start camera: {e}")
-        pause()
-        return
-
-    time.sleep(0.5)  # let it warm up a bit
-    frame = camera.get_frame()
-    fps = camera.get_fps()
-    if frame is None:
-        print("[CAM] No frame received.")
     else:
-        h, w = frame.shape[:2]
-        print(f"[CAM] Got frame: {w}x{h}, fps={fps:.2f}")
+        power = float(power_str)
+except Exception:
+    print("[WARN] Invalid input, using 0.4")
+    power = 0.4
 
-    camera.stop()
-    pause()
+# Clamp
+if power < 0.0:
+    power = 0.0
+if power > 1.0:
+    power = 1.0
 
+duration = 1.5
 
-# ---------------- Main menu ----------------
+print("\n========================================")
+print("[TEST 1] LEFT MOTOR ONLY")
+print("Expected: ONLY left wheel should move forward.")
+input("Press ENTER to start left motor test...")
 
+motors.open_loop(power, 0.0)
+print(f"[CMD] open_loop(left={power:.2f}, right=0.00)")
+time.sleep(duration)
+motors.open_loop(0.0, 0.0)
+print("[INFO] Left motor test done.")
+input("If behavior was correct, press ENTER to continue...")
 
-def main():
-    print("=== AI Car Diagnostics (Terminal UI) ===")
-    print("Using CONFIG from app.py")
+print("\n========================================")
+print("[TEST 2] RIGHT MOTOR ONLY")
+print("Expected: ONLY right wheel should move forward.")
+input("Press ENTER to start right motor test...")
 
-    motors = make_motors()
-    camera = make_camera()
+motors.open_loop(0.0, power)
+print(f"[CMD] open_loop(left=0.00, right={power:.2f})")
+time.sleep(duration)
+motors.open_loop(0.0, 0.0)
+print("[INFO] Right motor test done.")
+input("If behavior was correct, press ENTER to continue...")
 
+print("\n========================================")
+print("[TEST 3] BOTH MOTORS")
+print("Expected: both wheels move forward, car goes straight (if balanced).")
+input("Press ENTER to start both-motor test...")
+
+motors.open_loop(power, power)
+print(f"[CMD] open_loop(left={power:.2f}, right={power:.2f})")
+time.sleep(duration)
+motors.open_loop(0.0, 0.0)
+print("[INFO] Both motors test done.")
+input("Press ENTER to continue to manual control...")
+
+# ----- Manual motor control -----
+print("\n========================================")
+print("[TEST 4] MANUAL MOTOR CONTROL")
+print("Enter left and right values in [0.0, 1.0].")
+print("Example: 0.3 0.3   (both forward)")
+print("Empty line to stop manual test.\n")
+
+while True:
+    line = input("left right > ").strip()
+    if line == "":
+        break
+    parts = line.split()
+    if len(parts) != 2:
+        print("Please enter two numbers: left right")
+        continue
     try:
-        while True:
-            print("\n--- Main Menu ---")
-            print("1) Motor test: left / right / both")
-            print("2) Motion patterns (forward + spins)")
-            print("3) Manual motor control")
-            print("4) Camera FPS test (10s)")
-            print("5) Camera single snapshot (shape + FPS)")
-            print("0) Exit")
-            choice = input("Select option: ").strip()
+        left = float(parts[0])
+        right = float(parts[1])
+    except Exception:
+        print("Invalid numbers.")
+        continue
 
-            if choice == "1":
-                test_motor_single_side(motors)
-            elif choice == "2":
-                test_motion_patterns(motors)
-            elif choice == "3":
-                manual_motor_control(motors)
-            elif choice == "4":
-                test_camera_fps(camera)
-            elif choice == "5":
-                camera_single_snapshot(camera)
-            elif choice == "0":
-                break
-            else:
-                print("Unknown option.")
-    finally:
-        print("\n[EXIT] Stopping motors and camera...")
-        try:
-            motors.open_loop(0.0, 0.0)
-        except Exception:
-            pass
-        try:
-            motors.shutdown()
-        except Exception:
-            pass
-        try:
-            camera.stop()
-        except Exception:
-            pass
-        print("[EXIT] Done.")
+    # clamp to [0, 1]
+    if left < 0.0:
+        left = 0.0
+    if left > 1.0:
+        left = 1.0
+    if right < 0.0:
+        right = 0.0
+    if right > 1.0:
+        right = 1.0
 
+    print(f"[CMD] open_loop(left={left:.2f}, right={right:.2f})")
+    motors.open_loop(left, right)
 
-if __name__ == "__main__":
+# stop motors after manual mode
+motors.open_loop(0.0, 0.0)
+print("[INFO] Manual motor test finished.")
+
+# ----- Camera tests -----
+print("\n========================================")
+print("[STEP] Initializing camera from CONFIG...")
+
+cam_cfg = CONFIG.get("camera", {})
+camera = CameraManager(
+    width=cam_cfg.get("width", 320),
+    height=cam_cfg.get("height", 240),
+    fps=cam_cfg.get("fps", 15),
+)
+
+print(f"[INFO] Camera config: {cam_cfg}")
+input("Press ENTER to start camera FPS test (~8 seconds)...")
+
+try:
+    print("[CAM] Starting camera...")
+    camera.start()
+except Exception as e:
+    print(f"[ERROR] Failed to start camera: {e}")
+    print("[EXIT] Stopping motors and exiting.")
     try:
-        main()
-    except KeyboardInterrupt:
-        print("\n[CTRL-C] Exiting.")
-        sys.exit(0)
+        motors.open_loop(0.0, 0.0)
+        motors.shutdown()
+    except Exception:
+        pass
+    sys.exit(1)
+
+start_time = time.time()
+last_print = start_time
+print(f"[CAM] Backend: {camera.backend_name}")
+print("[CAM] Reading FPS, watch the values below:\n")
+
+while True:
+    now = time.time()
+    if now - start_time > 8.0:
+        break
+
+    # grab frame just to keep pipeline active
+    frame = camera.get_frame()
+    if (now - last_print) >= 1.0:
+        fps = camera.get_fps()
+        if frame is None:
+            print(f"  [{now - start_time:4.1f}s] FPS={fps:.2f} (no frame)")
+        else:
+            h = frame.shape[0]
+            w = frame.shape[1]
+            print(f"  [{now - start_time:4.1f}s] FPS={fps:.2f}, frame={w}x{h}")
+        last_print = now
+
+    time.sleep(0.01)
+
+print("\n[CAM] Stopping camera...")
+camera.stop()
+
+print("\n========================================")
+print("[DONE] Validation script finished.")
+print("Motors stopped, camera stopped.")
+try:
+    motors.open_loop(0.0, 0.0)
+    motors.shutdown()
+except Exception:
+    pass
+print("Good luck with further debugging and AI driving!")
