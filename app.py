@@ -691,6 +691,7 @@ control_params = {
 }
 control_lock = threading.Lock()
 
+motor_loop_running = True
 
 def _apply_expo01(x: float, expo: float) -> float:
     """
@@ -701,10 +702,10 @@ def _apply_expo01(x: float, expo: float) -> float:
     v = max(0.0, min(1.0, float(x)))
     return v ** expo
 
-
 def motor_loop(motors: MotorController):
+    global motor_loop_running
     logger.info("[motor_loop] started")
-    while True:
+    while motor_loop_running:
         with control_lock:
             hz = float(control_params.get("hz", CONTROL_DEFAULT_HZ))
             alpha = float(control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
@@ -736,13 +737,19 @@ def motor_loop(motors: MotorController):
         la_cmd = max(0.0, min(1.0, la_cmd))
         ra_cmd = max(0.0, min(1.0, ra_cmd))
 
-        motors.open_loop(la_cmd, ra_cmd)
+        try:
+            motors.open_loop(la_cmd, ra_cmd)
+        except Exception as e:
+            logger.exception("motor_loop: open_loop failed, stopping loop")
+            break
 
         with control_lock:
             control_state["left_actual"] = la
             control_state["right_actual"] = ra
 
         time.sleep(dt)
+
+    logger.info("[motor_loop] exiting")
 
 
 # ============================================================
@@ -1317,20 +1324,25 @@ def api_deploy_gains():
 @atexit.register
 def _cleanup():
     logger.info("Shutting down AI Car server...")
+    global motor_loop_running
     try:
         deploy_status["autopilot"] = False
     except Exception:
         pass
+
+    # Stop motor loop before killing pigpio / GPIO
+    motor_loop_running = False
+    time.sleep(0.05)
+
     try:
         motors.shutdown()
     except Exception:
-        pass
+        logger.exception("Error during motors.shutdown()")
     try:
         camera.stop()
     except Exception:
-        pass
+        logger.exception("Error during camera.stop()")
     logger.info("Cleanup complete")
-
 
 if __name__ == "__main__":
     host = CONFIG["server"].get("host", "0.0.0.0")
