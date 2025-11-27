@@ -259,6 +259,9 @@ class CameraManager:
     # ---------- processing ----------
 
     def _apply_processing(self, frame_bgr):
+
+        frame_bgr = frame_bgr[:, :, ::-1]
+        
         if (
             not self.vflip
             and not self.hflip
