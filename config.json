@@ -10,10 +10,10 @@
   },
   "motor": {
     "pins": {
-      "left_forward": 5,
-      "left_backward": 6,
-      "right_forward": 20,
-      "right_backward": 21,
+      "left_forward": 20,
+      "left_backward": 21,
+      "right_forward": 5,
+      "right_backward": 6,
       "left_pwm": null,
       "right_pwm": null,
       "stby": null

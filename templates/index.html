@@ -1131,8 +1131,8 @@
         return;
       }
 
-      const speedGain = parseFloat(document.getElementById("joy-speed").value || "0.8");
-      const steerGain = parseFloat(document.getElementById("joy-steer").value || "0.7");
+      const speedGain = parseFloat(document.getElementById("joy-speed").value || "0.5");
+      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1");
 
       let forward = Math.max(0, -ny * speedGain); // up = forward
       forward = Math.max(0, Math.min(1, forward));
