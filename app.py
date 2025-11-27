@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+"""
+AI CAR SERVER – SECTION MAP
+
+[1] Config & logging
+[2] Camera subsystem
+[3] Motor backends
+[4] Motor control loop (Hz/alpha/trim/expo)
+[5] Flask app setup & globals
+[6] File-system API (editor backend)
+[7] Camera routes
+[8] Datasets & labeling
+[9] Logging stub
+[10] Motor routes
+[11] Train stub
+[12] Deploy stub (autopilot stub)
+[13] Cleanup & main entry
+"""
+
+# ============================================================
+# [1] Config & logging
+# ============================================================
+
 import os
 import json
 import time
@@ -13,43 +35,42 @@ import numpy as np
 from flask import Flask, jsonify, request, Response, render_template
 from flask_cors import CORS
 
-# ============================================================
-# Config + Logging
-# ============================================================
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 
 
-def load_config(path=CONFIG_PATH):
+def _default_config():
+    return {
+        "server": {"host": "0.0.0.0", "port": 8888},
+        "camera": {"width": 320, "height": 240, "fps": 15},
+        "motor": {
+            "pins": {
+                "left_forward": 5,
+                "left_backward": 6,
+                "right_forward": 20,
+                "right_backward": 21,
+                "left_pwm": None,
+                "right_pwm": None,
+                "stby": None,
+            },
+            "invert_left": False,
+            "invert_right": False,
+            "pwm_freq": 800,
+            "max_duty_pct": 90,
+            "deadzone": 0.03,
+        },
+        "paths": {
+            "logs_root": "data/logs",
+            "datasets_root": "data/datasets",
+            "models_root": "data/models",
+        },
+    }
+
+
+def load_config(path: str = CONFIG_PATH):
     if not os.path.exists(path):
-        # minimal default config (smaller camera + fps to reduce load)
-        cfg = {
-            "server": {"host": "0.0.0.0", "port": 8888},
-            "camera": {"width": 320, "height": 240, "fps": 15},
-            "motor": {
-                "pins": {
-                    "left_forward": 5,
-                    "left_backward": 6,
-                    "right_forward": 20,
-                    "right_backward": 21,
-                    "left_pwm": None,
-                    "right_pwm": None,
-                    "stby": None,
-                },
-                # default: no inversion, easier to reason about
-                "invert_left": False,
-                "invert_right": False,
-                "pwm_freq": 800,
-                "max_duty_pct": 90,
-                "deadzone": 0.03,
-            },
-            "paths": {
-                "logs_root": "data/logs",
-                "datasets_root": "data/datasets",
-                "models_root": "data/models",
-            },
-        }
+        cfg = _default_config()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             json.dump(cfg, f, indent=2)
@@ -61,55 +82,62 @@ def load_config(path=CONFIG_PATH):
 CONFIG = load_config()
 
 DATA_ROOT = os.path.join(ROOT, "data")
-LOG_ROOT = os.path.join(DATA_ROOT, "logs")
-DATASETS_ROOT = os.path.join(DATA_ROOT, "datasets")
-MODELS_ROOT = os.path.join(DATA_ROOT, "models")
+LOGS_ROOT = os.path.join(ROOT, CONFIG["paths"]["logs_root"])
+DATASETS_ROOT = os.path.join(ROOT, CONFIG["paths"]["datasets_root"])
+MODELS_ROOT = os.path.join(ROOT, CONFIG["paths"]["models_root"])
 
-for d in (DATA_ROOT, LOG_ROOT, DATASETS_ROOT, MODELS_ROOT):
+for d in (DATA_ROOT, LOGS_ROOT, DATASETS_ROOT, MODELS_ROOT):
     os.makedirs(d, exist_ok=True)
 
-log_path = os.path.join(LOG_ROOT, "app.log")
+LOG_PATH = os.path.join(LOGS_ROOT, "app.log")
 logging.basicConfig(
-    filename=log_path,
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_PATH),
+        logging.StreamHandler(),
+    ],
 )
-console = logging.StreamHandler()
-console.setLevel(logging.INFO)
-console.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.getLogger("").addHandler(console)
-
 logger = logging.getLogger("aicar")
-logger.info("AI Car server starting up...")
+logger.info("AI Car server starting...")
+
+
+def ok(data=None):
+    return jsonify({"ok": True, "data": data})
+
+
+def err(message, code=400):
+    return jsonify({"ok": False, "error": str(message)}), code
+
 
 # ============================================================
-# Camera (hybrid backend, threaded + simple processing)
+# [2] Camera subsystem
 # ============================================================
 
 
 class CameraManager:
     """
-    Hybrid camera manager:
+    CameraManager:
       1. Try Picamera2 (BGR888)
       2. Try /dev/video* via OpenCV V4L2
-      3. Try GStreamer libcamerasrc → BGR
+      3. Try GStreamer via OpenCV if available
 
-    Provides:
+    API:
       - start()
       - stop()
-      - get_frame()  -> latest processed BGR frame or None
-      - get_raw()    -> latest raw BGR frame or None
-      - get_fps()
-      - backend_name
+      - get_frame() -> processed BGR frame or None
+      - get_raw()   -> raw BGR frame or None
+      - get_fps()   -> moving average FPS
       - update_settings(...)
+      - backend_name property
     """
 
-    def __init__(self, width=320, height=240, fps=15):
+    def __init__(self, width: int, height: int, fps: int):
         self.width = int(width)
         self.height = int(height)
         self.fps = int(fps)
 
-        self._backend = None
+        self._backend = None  # "picamera2" / "v4l2:/dev/videoX" / "gstreamer" / None
         self._picam2 = None
         self._cap = None
 
@@ -125,16 +153,16 @@ class CameraManager:
         self.vflip = False
         self.hflip = False
         self.gray = False
-        self.mode = "raw"  # raw / gray / edges
+        self.mode = "raw"  # "raw", "gray", "edges"
         self.gamma = 1.0
 
-        # gamma LUT cache (for speed)
         self._gamma_lut = None
         self._gamma_lut_for = None
 
-    # -------- Backend detection helpers --------
+    # ---------- backend helpers ----------
+
     @staticmethod
-    def _opencv_supports_gst():
+    def _opencv_supports_gst() -> bool:
         try:
             info = cv2.getBuildInformation()
             return "GStreamer" in info and "YES" in info
@@ -145,14 +173,14 @@ class CameraManager:
     def _list_video_devices():
         return sorted(glob.glob("/dev/video*"))
 
-    # -------- Open/close backends --------
-    def _open_backend(self):
-        # Try Picamera2 first
+    # ---------- open / close ----------
+
+    def _open_backend(self) -> bool:
+        # Picamera2
         try:
             from picamera2 import Picamera2  # type: ignore
 
             cam = Picamera2()
-            # Use BGR888 so frames are already BGR for OpenCV
             cfg = cam.create_preview_configuration(
                 main={"size": (self.width, self.height), "format": "BGR888"},
                 buffer_count=3,
@@ -161,13 +189,13 @@ class CameraManager:
             cam.start()
             self._picam2 = cam
             self._backend = "picamera2"
-            logger.info("Camera: using Picamera2 backend (BGR888)")
+            logger.info("Camera: using Picamera2 backend")
             return True
         except Exception as e:
-            logger.info(f"Camera: Picamera2 not available: {e!r}")
+            logger.info("Camera: Picamera2 not available: %r", e)
             self._picam2 = None
 
-        # Try V4L2 devices via OpenCV
+        # V4L2
         for dev in self._list_video_devices():
             try:
                 cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
@@ -177,36 +205,36 @@ class CameraManager:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 cap.set(cv2.CAP_PROP_FPS, self.fps)
-                ok, frame = cap.read()
-                if ok and frame is not None:
+                ok_, frame = cap.read()
+                if ok_ and frame is not None:
                     self._cap = cap
                     self._backend = f"v4l2:{dev}"
-                    logger.info(f"Camera: using V4L2 backend on {dev}")
+                    logger.info("Camera: using V4L2 backend on %s", dev)
                     return True
                 cap.release()
             except Exception as e:
-                logger.info(f"Camera: V4L2 check failed on {dev}: {e!r}")
+                logger.info("Camera: V4L2 probe failed on %s: %r", dev, e)
 
-        # Try GStreamer pipeline if OpenCV has GStreamer
+        # GStreamer
         if self._opencv_supports_gst():
             try:
                 pipeline = (
-                    f"libcamerasrc ! "
+                    "libcamerasrc ! "
                     f"video/x-raw,width={self.width},height={self.height},"
                     f"framerate={self.fps}/1,format=RGB ! "
-                    f"videoconvert ! video/x-raw,format=BGR ! "
-                    f"appsink drop=1 max-buffers=1 sync=false"
+                    "videoconvert ! video/x-raw,format=BGR ! "
+                    "appsink drop=1 max-buffers=1 sync=false"
                 )
                 cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-                ok, frame = cap.read()
-                if ok and frame is not None:
+                ok_, frame = cap.read()
+                if ok_ and frame is not None:
                     self._cap = cap
                     self._backend = "gstreamer"
                     logger.info("Camera: using GStreamer backend")
                     return True
                 cap.release()
             except Exception as e:
-                logger.info(f"Camera: GStreamer backend failed: {e!r}")
+                logger.info("Camera: GStreamer backend failed: %r", e)
 
         logger.error("Camera: failed to open any backend")
         return False
@@ -219,20 +247,18 @@ class CameraManager:
             except Exception:
                 pass
             self._picam2 = None
-
         if self._cap is not None:
             try:
                 self._cap.release()
             except Exception:
                 pass
             self._cap = None
-
-        self._backend = None
         logger.info("Camera: backend closed")
+        self._backend = None
 
-    # -------- Processing --------
+    # ---------- processing ----------
+
     def _apply_processing(self, frame_bgr):
-        # Fast path: absolutely raw, no processing
         if (
             not self.vflip
             and not self.hflip
@@ -244,22 +270,20 @@ class CameraManager:
 
         img = frame_bgr
 
-        # flips
         if self.vflip:
             img = cv2.flip(img, 0)
         if self.hflip:
             img = cv2.flip(img, 1)
 
-        # gamma (with cached LUT)
         if abs(self.gamma - 1.0) > 1e-3:
             if self._gamma_lut_for != self.gamma or self._gamma_lut is None:
                 inv = 1.0 / max(self.gamma, 1e-6)
                 table = (np.arange(256, dtype=np.float32) / 255.0) ** inv * 255.0
-                self._gamma_lut = np.clip(table, 0, 255).astype(np.uint8)
+                lut = np.clip(table, 0, 255).astype(np.uint8)
+                self._gamma_lut = lut
                 self._gamma_lut_for = self.gamma
             img = cv2.LUT(img, self._gamma_lut)
 
-        # mode / gray / edges
         mode = self.mode
         if mode == "gray" or (self.gray and mode == "raw"):
             g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -286,28 +310,30 @@ class CameraManager:
             except Exception:
                 pass
 
-    # -------- Grabbing frames --------
+    # ---------- grabbing ----------
+
     def _grab_frame_bgr(self):
         if self._backend == "picamera2" and self._picam2 is not None:
             arr = self._picam2.capture_array("main")
             if arr is None:
                 return None
-            # NOTE: if Picamera2 already returns BGR, you can drop the next line.
-            arr = arr[..., ::-1]
+            # Picamera2 BGR888 is actually BGR already; if you see swapped colors,
+            # flip channels here.
             return arr
 
         if self._cap is not None:
-            ok, frame = self._cap.read()
-            return frame if ok else None
+            ok_, frame = self._cap.read()
+            return frame if ok_ else None
 
         return None
 
-    # -------- Public API --------
+    # ---------- public API ----------
+
     def start(self):
         if self._running:
             return
         if not self._open_backend():
-            raise RuntimeError("Camera: unable to open any backend")
+            raise RuntimeError("Camera: unable to open backend")
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -333,7 +359,7 @@ class CameraManager:
                 self._frame_raw = frame
                 self._frame_proc = proc
 
-        logger.info("Camera: capture loop exiting")
+        logger.info("Camera: capture loop stopped")
 
     def stop(self):
         self._running = False
@@ -352,7 +378,7 @@ class CameraManager:
                 return None
             return self._frame_raw.copy()
 
-    def get_fps(self):
+    def get_fps(self) -> float:
         if not self._fps_hist:
             return 0.0
         return round(sum(self._fps_hist) / len(self._fps_hist), 2)
@@ -363,8 +389,9 @@ class CameraManager:
 
 
 # ============================================================
-# Motors (pigpio / RPi.GPIO / Dummy)
+# [3] Motor backends
 # ============================================================
+
 
 class MotorBase:
     def set_openloop(self, left: float, right: float):
@@ -374,27 +401,39 @@ class MotorBase:
         raise NotImplementedError
 
     def shutdown(self):
-        self.stop()
+        try:
+            self.stop()
+        except Exception:
+            pass
 
 
 class MotorDummy(MotorBase):
+    def __init__(self):
+        logger.info("MotorDummy initialized")
+
     def set_openloop(self, left: float, right: float):
+        # Silent dummy; you can log if you want.
         pass
 
     def stop(self):
-        logger.info("[MOTOR dummy] stop")
+        logger.info("MotorDummy stop")
 
     def shutdown(self):
         logger.info("MotorDummy shutdown")
 
 
 class MotorPigpio(MotorBase):
+    """
+    Forward-only: set_openloop(left, right) expects 0..1.
+    Direction is handled by which pin is driven HIGH depending on invert flags.
+    """
+
     def __init__(self, cfg: dict):
         import pigpio  # type: ignore
 
         self.pi = pigpio.pi()
         if not self.pi.connected:
-            raise RuntimeError("pigpio daemon not running (sudo pigpiod)")
+            raise RuntimeError("pigpio daemon not running; try 'sudo pigpiod'")
 
         pins = cfg.get("pins", {})
         self.LF = int(pins.get("left_forward", 5))
@@ -405,13 +444,13 @@ class MotorPigpio(MotorBase):
         self.RP = pins.get("right_pwm")
         self.STBY = pins.get("stby")
 
-        self.invL = bool(cfg.get("invert_left", False))
-        self.invR = bool(cfg.get("invert_right", False))
+        self.invert_left = bool(cfg.get("invert_left", False))
+        self.invert_right = bool(cfg.get("invert_right", False))
         self.freq = int(cfg.get("pwm_freq", 800))
         self.max_duty = max(0, min(100, int(cfg.get("max_duty_pct", 90))))
         self.deadzone = float(cfg.get("deadzone", 0.03))
 
-        for p in [self.LF, self.LB, self.RF, self.RB]:
+        for p in (self.LF, self.LB, self.RF, self.RB):
             self.pi.set_mode(p, pigpio.OUTPUT)
 
         if self.LP is not None:
@@ -428,61 +467,47 @@ class MotorPigpio(MotorBase):
         self.stop()
         logger.info("MotorPigpio initialized")
 
-    def _set_pwm(self, pin, duty_pct):
-        if pin is None:
+    def _set_pwm(self, pwm_pin, duty_pct):
+        if pwm_pin is None:
             return
-        duty_pct = max(0, min(100, duty_pct))
-        self.pi.set_PWM_dutycycle(int(pin), int(255 * duty_pct / 100.0))
+        duty_pct = max(0.0, min(100.0, float(duty_pct)))
+        self.pi.set_PWM_dutycycle(int(pwm_pin), int(255 * duty_pct / 100.0))
 
-    def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
-        """
-        Bidirectional control:
-          - value in [-1.0, 1.0]
-          - sign = direction (forward / reverse)
-          - magnitude = speed
-          - invert flips the sign
-        """
-        v = float(value)
-        # clamp to [-1, 1]
-        if v > 1.0:
-            v = 1.0
-        if v < -1.0:
-            v = -1.0
+    def _drive_channel(self, fwd_pin, rev_pin, pwm_pin, value, invert):
+        # value is logical forward 0..1
+        v = max(0.0, min(1.0, float(value)))
 
-        if invert:
-            v = -v
-
-        # deadzone
-        if abs(v) < self.deadzone:
+        if v < self.deadzone:
             v = 0.0
 
-        if v > 0:
-            # forward
-            self.pi.write(int(fwd_pin), 1)
-            self.pi.write(int(rev_pin), 0)
-            duty = v * self.max_duty
-        elif v < 0:
-            # reverse
-            self.pi.write(int(fwd_pin), 0)
-            self.pi.write(int(rev_pin), 1)
-            duty = (-v) * self.max_duty  # use magnitude
-        else:
+        if v <= 0.0:
             # stop
             self.pi.write(int(fwd_pin), 0)
             self.pi.write(int(rev_pin), 0)
-            duty = 0.0
+            self._set_pwm(pwm_pin, 0)
+            return
+
+        duty = v * self.max_duty
+
+        if not invert:
+            self.pi.write(int(fwd_pin), 1)
+            self.pi.write(int(rev_pin), 0)
+        else:
+            # wiring inverted: use "reverse" pin as physical forward
+            self.pi.write(int(fwd_pin), 0)
+            self.pi.write(int(rev_pin), 1)
 
         self._set_pwm(pwm_pin, duty)
 
     def set_openloop(self, left: float, right: float):
-        self._drive_channel(self.LP, self.LF, self.LB, left, self.invL)
-        self._drive_channel(self.RP, self.RF, self.RB, right, self.invR)
+        self._drive_channel(self.LF, self.LB, self.LP, left, self.invert_left)
+        self._drive_channel(self.RF, self.RB, self.RP, right, self.invert_right)
 
     def stop(self):
+        for p in (self.LF, self.LB, self.RF, self.RB):
+            self.pi.write(int(p), 0)
         self._set_pwm(self.LP, 0)
         self._set_pwm(self.RP, 0)
-        for p in [self.LF, self.LB, self.RF, self.RB]:
-            self.pi.write(int(p), 0)
 
     def shutdown(self):
         self.stop()
@@ -493,7 +518,10 @@ class MotorPigpio(MotorBase):
 class MotorRPiGPIO(MotorBase):
     def __init__(self, cfg: dict):
         import RPi.GPIO as GPIO  # type: ignore
+
         self.GPIO = GPIO
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
 
         pins = cfg.get("pins", {})
         self.LF = int(pins.get("left_forward", 5))
@@ -504,31 +532,25 @@ class MotorRPiGPIO(MotorBase):
         self.RP = pins.get("right_pwm")
         self.STBY = pins.get("stby")
 
-        self.invL = bool(cfg.get("invert_left", False))
-        self.invR = bool(cfg.get("invert_right", False))
+        self.invert_left = bool(cfg.get("invert_left", False))
+        self.invert_right = bool(cfg.get("invert_right", False))
         self.freq = int(cfg.get("pwm_freq", 800))
         self.max_duty = max(0, min(100, int(cfg.get("max_duty_pct", 90))))
         self.deadzone = float(cfg.get("deadzone", 0.03))
 
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-
-        for p in [self.LF, self.LB, self.RF, self.RB]:
+        for p in (self.LF, self.LB, self.RF, self.RB):
             GPIO.setup(p, GPIO.OUT)
 
+        self.pwmL = None
+        self.pwmR = None
         if self.LP is not None:
             GPIO.setup(self.LP, GPIO.OUT)
             self.pwmL = GPIO.PWM(self.LP, self.freq)
             self.pwmL.start(0)
-        else:
-            self.pwmL = None
-
         if self.RP is not None:
             GPIO.setup(self.RP, GPIO.OUT)
             self.pwmR = GPIO.PWM(self.RP, self.freq)
             self.pwmR.start(0)
-        else:
-            self.pwmR = None
 
         if self.STBY is not None:
             GPIO.setup(self.STBY, GPIO.OUT)
@@ -540,67 +562,51 @@ class MotorRPiGPIO(MotorBase):
     def _set_pwm(self, pwm, duty_pct):
         if pwm is None:
             return
-        duty_pct = max(0, min(100, duty_pct))
+        duty_pct = max(0.0, min(100.0, float(duty_pct)))
         pwm.ChangeDutyCycle(duty_pct)
 
-    def _drive_channel(self, pwm_pin, fwd_pin, rev_pin, value, invert):
-        """
-        Bidirectional control, same behavior as pigpio:
-          - value in [-1.0, 1.0]
-          - sign = direction
-          - invert flips sign
-        """
+    def _drive_channel(self, fwd_pin, rev_pin, pwm, value, invert):
         GPIO = self.GPIO
-        v = float(value)
+        v = max(0.0, min(1.0, float(value)))
 
-        # clamp to [-1, 1]
-        if v > 1.0:
-            v = 1.0
-        if v < -1.0:
-            v = -1.0
-
-        if invert:
-            v = -v
-
-        # deadzone
-        if abs(v) < self.deadzone:
+        if v < self.deadzone:
             v = 0.0
 
-        if v > 0:
-            # forward
+        if v <= 0.0:
+            GPIO.output(fwd_pin, GPIO.LOW)
+            GPIO.output(rev_pin, GPIO.LOW)
+            self._set_pwm(pwm, 0)
+            return
+
+        duty = v * self.max_duty
+
+        if not invert:
             GPIO.output(fwd_pin, GPIO.HIGH)
             GPIO.output(rev_pin, GPIO.LOW)
-            duty = v * self.max_duty
-        elif v < 0:
-            # reverse
+        else:
             GPIO.output(fwd_pin, GPIO.LOW)
             GPIO.output(rev_pin, GPIO.HIGH)
-            duty = (-v) * self.max_duty
-        else:
-            # stop
-            GPIO.output(fwd_pin, GPIO.LOW)
-            GPIO.output(rev_pin, GPIO.LOW)
-            duty = 0.0
 
-        self._set_pwm(pwm_pin, duty)
+        self._set_pwm(pwm, duty)
 
     def set_openloop(self, left: float, right: float):
-        self._drive_channel(self.pwmL, self.LF, self.LB, left, self.invL)
-        self._drive_channel(self.pwmR, self.RF, self.RB, right, self.invR)
+        self._drive_channel(self.LF, self.LB, self.pwmL, left, self.invert_left)
+        self._drive_channel(self.RF, self.RB, self.pwmR, right, self.invert_right)
 
     def stop(self):
-        self.GPIO.output(self.LF, self.GPIO.LOW)
-        self.GPIO.output(self.LB, self.GPIO.LOW)
-        self.GPIO.output(self.RF, self.GPIO.LOW)
-        self.GPIO.output(self.RB, self.GPIO.LOW)
+        G = self.GPIO
+        G.output(self.LF, G.LOW)
+        G.output(self.LB, G.LOW)
+        G.output(self.RF, G.LOW)
+        G.output(self.RB, G.LOW)
         self._set_pwm(self.pwmL, 0)
         self._set_pwm(self.pwmR, 0)
 
     def shutdown(self):
         self.stop()
-        if self.pwmL:
+        if self.pwmL is not None:
             self.pwmL.stop()
-        if self.pwmR:
+        if self.pwmR is not None:
             self.pwmR.stop()
         self.GPIO.cleanup()
         logger.info("MotorRPiGPIO shutdown")
@@ -608,10 +614,8 @@ class MotorRPiGPIO(MotorBase):
 
 class MotorController:
     """
-    Wrapper that auto-selects backend:
-      - pigpio if available
-      - RPi.GPIO if available
-      - Dummy otherwise
+    Tries pigpio -> RPi.GPIO -> Dummy.
+    Exposes open_loop(left,right), stop(), shutdown(), backend_name.
     """
 
     def __init__(self, cfg: dict):
@@ -619,30 +623,38 @@ class MotorController:
         self.backend = None
         self.backend_name = "dummy"
 
+        # pigpio
         try:
             import pigpio  # noqa: F401
+
             self.backend = MotorPigpio(self.cfg)
             self.backend_name = "pigpio"
-            logger.info("MotorController using pigpio backend")
+            logger.info("MotorController backend: pigpio")
             return
         except Exception as e:
-            logger.info(f"MotorController: pigpio unavailable: {e!r}")
+            logger.info("MotorController: pigpio unavailable: %r", e)
 
+        # RPi.GPIO
         try:
             import RPi.GPIO  # noqa: F401
+
             self.backend = MotorRPiGPIO(self.cfg)
             self.backend_name = "RPi.GPIO"
-            logger.info("MotorController using RPi.GPIO backend")
+            logger.info("MotorController backend: RPi.GPIO")
             return
         except Exception as e:
-            logger.info(f"MotorController: RPi.GPIO unavailable: {e!r}")
+            logger.info("MotorController: RPi.GPIO unavailable: %r", e)
 
+        # Dummy
         self.backend = MotorDummy()
         self.backend_name = "dummy"
-        logger.info("MotorController using Dummy backend")
+        logger.info("MotorController backend: dummy")
 
     def open_loop(self, left: float, right: float):
-        self.backend.set_openloop(float(left), float(right))
+        # clamp to 0..1 before hardware
+        l = max(0.0, min(1.0, float(left)))
+        r = max(0.0, min(1.0, float(right)))
+        self.backend.set_openloop(l, r)
 
     def stop(self):
         self.backend.stop()
@@ -652,7 +664,86 @@ class MotorController:
 
 
 # ============================================================
-# Flask app + globals
+# [4] Motor control loop (Hz/alpha/trim/expo)
+# ============================================================
+
+CONTROL_DEFAULT_HZ = 100.0
+CONTROL_DEFAULT_ALPHA = 0.35
+TRIM_DEFAULT_LEFT = 1.0
+TRIM_DEFAULT_RIGHT = 1.0
+EXPO_DEFAULT_THROTTLE = 1.3
+
+control_state = {
+    "left_target": 0.0,   # logical 0..1
+    "right_target": 0.0,
+    "left_actual": 0.0,   # smoothed logical 0..1
+    "right_actual": 0.0,
+}
+control_params = {
+    "hz": CONTROL_DEFAULT_HZ,
+    "alpha": CONTROL_DEFAULT_ALPHA,
+    "left_trim": TRIM_DEFAULT_LEFT,
+    "right_trim": TRIM_DEFAULT_RIGHT,
+    "throttle_expo": EXPO_DEFAULT_THROTTLE,
+}
+control_lock = threading.Lock()
+
+
+def _apply_expo01(x: float, expo: float) -> float:
+    """
+    Expo on [0,1]: returns x**expo, clamped.
+    expo > 1 = softer near 0, still reaches 1 at 1.
+    """
+    expo = max(0.1, min(5.0, float(expo)))
+    v = max(0.0, min(1.0, float(x)))
+    return v ** expo
+
+
+def motor_loop(motors: MotorController):
+    logger.info("[motor_loop] started")
+    while True:
+        with control_lock:
+            hz = float(control_params.get("hz", CONTROL_DEFAULT_HZ))
+            alpha = float(control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
+            left_trim = float(control_params.get("left_trim", TRIM_DEFAULT_LEFT))
+            right_trim = float(control_params.get("right_trim", TRIM_DEFAULT_RIGHT))
+            throttle_expo = float(control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE))
+
+            hz = max(5.0, min(200.0, hz))
+            alpha = max(0.0, min(1.0, alpha))
+            left_trim = max(0.5, min(1.5, left_trim))
+            right_trim = max(0.5, min(1.5, right_trim))
+            throttle_expo = max(0.5, min(3.0, throttle_expo))
+
+            lt = max(0.0, min(1.0, control_state["left_target"]))
+            rt = max(0.0, min(1.0, control_state["right_target"]))
+            la = max(0.0, min(1.0, control_state["left_actual"]))
+            ra = max(0.0, min(1.0, control_state["right_actual"]))
+
+        dt = 1.0 / hz
+
+        # logical smoothing
+        la = la + alpha * (lt - la)
+        ra = ra + alpha * (rt - ra)
+
+        # expo + trim
+        la_cmd = _apply_expo01(la, throttle_expo) * left_trim
+        ra_cmd = _apply_expo01(ra, throttle_expo) * right_trim
+
+        la_cmd = max(0.0, min(1.0, la_cmd))
+        ra_cmd = max(0.0, min(1.0, ra_cmd))
+
+        motors.open_loop(la_cmd, ra_cmd)
+
+        with control_lock:
+            control_state["left_actual"] = la
+            control_state["right_actual"] = ra
+
+        time.sleep(dt)
+
+
+# ============================================================
+# [5] Flask app setup & globals
 # ============================================================
 
 app = Flask(__name__, template_folder="templates", static_folder=None)
@@ -670,127 +761,79 @@ motors = MotorController(cfg=motor_cfg)
 
 camera_on = False
 
-# --- motor control state (smooth, prioritized loop) ---
-CONTROL_DEFAULT_HZ = 100.0       # faster loop for less lag
-CONTROL_DEFAULT_ALPHA = 0.35     # smoothing factor (0=very smooth, 1=no smoothing)
-TRIM_DEFAULT_LEFT = 1.0
-TRIM_DEFAULT_RIGHT = 1.0
-EXPO_DEFAULT_THROTTLE = 1.3      # >1 = softer near center
-
-control_state = {
-    "left_target": 0.0,   # logical [-1,1]
-    "right_target": 0.0,  # logical [-1,1]
-    "left_actual": 0.0,   # smoothed logical
-    "right_actual": 0.0,
-}
-control_lock = threading.Lock()
-
-# tunable control parameters (exposed to web UI)
-control_params = {
-    "hz": CONTROL_DEFAULT_HZ,
-    "alpha": CONTROL_DEFAULT_ALPHA,
-    "left_trim": TRIM_DEFAULT_LEFT,
-    "right_trim": TRIM_DEFAULT_RIGHT,
-    "throttle_expo": EXPO_DEFAULT_THROTTLE,
-}
-
-def _apply_expo(x: float, expo: float) -> float:
-    """
-    Simple expo curve: sign(x) * |x|^expo
-    expo > 1.0  -> softer near center (more gentle control)
-    expo = 1.0  -> linear
-    expo < 1.0  -> aggressive near center (not recommended here)
-    """
-    v = float(x)
-    expo = max(0.1, min(5.0, float(expo)))
-    s = 1.0 if v >= 0 else -1.0
-    return s * (abs(v) ** expo)
-
-
-def motor_loop():
-    logger.info("[motor_loop] started (tunable Hz/alpha/trim/expo)")
-    while True:
-        # snapshot under lock
-        with control_lock:
-            hz = float(control_params.get("hz", CONTROL_DEFAULT_HZ))
-            alpha = float(control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
-            left_trim = float(control_params.get("left_trim", TRIM_DEFAULT_LEFT))
-            right_trim = float(control_params.get("right_trim", TRIM_DEFAULT_RIGHT))
-            throttle_expo = float(control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE))
-
-            # clamp to safe ranges
-            hz = max(5.0, min(200.0, hz))           # 5..200 Hz
-            alpha = max(0.0, min(1.0, alpha))       # 0..1
-            left_trim = max(0.5, min(1.5, left_trim))
-            right_trim = max(0.5, min(1.5, right_trim))
-            throttle_expo = max(0.5, min(3.0, throttle_expo))
-
-            lt = control_state["left_target"]
-            rt = control_state["right_target"]
-            la = control_state["left_actual"]
-            ra = control_state["right_actual"]
-
-        dt = 1.0 / hz
-
-        # smooth transitions in logical space
-        la = la + alpha * (lt - la)
-        ra = ra + alpha * (rt - ra)
-
-        # apply expo + trim just before sending to motors
-        la_cmd = _apply_expo(la, throttle_expo) * left_trim
-        ra_cmd = _apply_expo(ra, throttle_expo) * right_trim
-
-        # clamp final outputs to [-1,1]
-        la_cmd = max(-1.0, min(1.0, la_cmd))
-        ra_cmd = max(-1.0, min(1.0, ra_cmd))
-
-        motors.open_loop(la_cmd, ra_cmd)
-
-        # write back smoothed logical values (not trimmed)
-        with control_lock:
-            control_state["left_actual"] = la
-            control_state["right_actual"] = ra
-
-        time.sleep(dt)
-
 # datasets
 current_dataset = "default"
 os.makedirs(os.path.join(DATASETS_ROOT, current_dataset), exist_ok=True)
 
 # train / deploy stubs
-train_status = {"running": False, "epoch": 0, "epochs": 0, "loss": None, "note": ""}
+train_status = {
+    "running": False,
+    "epoch": 0,
+    "epochs": 0,
+    "loss": None,
+    "note": "stub trainer",
+}
 deploy_status = {
     "autopilot": False,
     "gains": {"throttle_gain": 1.0, "steering_gain": 1.0, "expo": 1.0},
     "drive_motors": False,
 }
+
 _autopilot_thread = None
 
+# start motor control loop once
+_motor_thread = threading.Thread(target=motor_loop, args=(motors,), daemon=True)
+_motor_thread.start()
 
-def ok(data=None):
-    return jsonify({"ok": True, "data": data})
 
+@app.route("/api/control/params", methods=["GET", "POST"])
+def api_control_params():
+    if request.method == "GET":
+        with control_lock:
+            return ok(control_params.copy())
 
-def err(message, code=400):
-    return jsonify({"ok": False, "error": str(message)}), code
+    body = request.get_json(silent=True) or {}
+    with control_lock:
+        if "hz" in body:
+            hz = float(body["hz"])
+            control_params["hz"] = max(5.0, min(200.0, hz))
+        if "alpha" in body:
+            a = float(body["alpha"])
+            control_params["alpha"] = max(0.0, min(1.0, a))
+        if "left_trim" in body:
+            lt = float(body["left_trim"])
+            control_params["left_trim"] = max(0.5, min(1.5, lt))
+        if "right_trim" in body:
+            rt = float(body["right_trim"])
+            control_params["right_trim"] = max(0.5, min(1.5, rt))
+        if "throttle_expo" in body:
+            te = float(body["throttle_expo"])
+            control_params["throttle_expo"] = max(0.5, min(3.0, te))
+        return ok(control_params.copy())
 
 
 # ============================================================
-# File system API
+# [6] File-system API (editor backend)
 # ============================================================
 
-FS_ROOT = ROOT  # you can point this to a subdir if you want
+FS_ROOT = ROOT  # project root; change if you want a subdirectory
 
 
-def _safe_path(rel_path: str) -> str:
-    rel = os.path.normpath(rel_path).lstrip(os.sep)
-    return os.path.join(FS_ROOT, rel)
+def _safe_path(rel: str) -> str:
+    rel_norm = os.path.normpath(rel).lstrip(os.sep)
+    full = os.path.join(FS_ROOT, rel_norm)
+    if not full.startswith(FS_ROOT):
+        raise ValueError("path escapes root")
+    return full
 
 
 @app.route("/api/fs/list")
 def api_fs_list():
     rel = request.args.get("path", ".")
-    base = _safe_path(rel)
+    try:
+        base = _safe_path(rel)
+    except ValueError:
+        return err("invalid path", 400)
     if not os.path.isdir(base):
         return err("not a directory", 400)
     entries = []
@@ -810,7 +853,10 @@ def api_fs_list():
 @app.route("/api/fs/read")
 def api_fs_read():
     rel = request.args.get("path", "")
-    full = _safe_path(rel)
+    try:
+        full = _safe_path(rel)
+    except ValueError:
+        return err("invalid path", 400)
     if not os.path.isfile(full):
         return err("not a file", 400)
     with open(full, "r", encoding="utf-8", errors="ignore") as f:
@@ -825,7 +871,10 @@ def api_fs_write():
     content = body.get("content", "")
     if not path:
         return err("path required", 400)
-    full = _safe_path(path)
+    try:
+        full = _safe_path(path)
+    except ValueError:
+        return err("invalid path", 400)
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
         f.write(content)
@@ -838,7 +887,10 @@ def api_fs_mkdir():
     path = body.get("path")
     if not path:
         return err("path required", 400)
-    full = _safe_path(path)
+    try:
+        full = _safe_path(path)
+    except ValueError:
+        return err("invalid path", 400)
     os.makedirs(full, exist_ok=True)
     return ok({"path": path})
 
@@ -849,7 +901,10 @@ def api_fs_delete():
     path = body.get("path")
     if not path:
         return err("path required", 400)
-    full = _safe_path(path)
+    try:
+        full = _safe_path(path)
+    except ValueError:
+        return err("invalid path", 400)
     try:
         if os.path.isdir(full):
             os.rmdir(full)
@@ -863,7 +918,7 @@ def api_fs_delete():
 
 
 # ============================================================
-# Camera routes
+# [7] Camera routes
 # ============================================================
 
 @app.route("/")
@@ -879,9 +934,9 @@ def api_health():
             "camera_fps": camera.get_fps(),
             "camera_backend": camera.backend_name,
             "motor_backend": motors.backend_name,
-            "time": time.time(),
-            "log_path": log_path,
             "current_dataset": current_dataset,
+            "time": time.time(),
+            "log_path": LOG_PATH,
         }
     )
 
@@ -913,8 +968,7 @@ def api_camera_frame():
     frame = camera.get_frame()
     if frame is None:
         return err("no frame", 409)
-    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]  # lower quality for smaller size
-    ret, jpeg = cv2.imencode(".jpg", frame, encode_params)
+    ret, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
     if not ret:
         return err("encode failed", 500)
     return Response(jpeg.tobytes(), mimetype="image/jpeg")
@@ -925,14 +979,13 @@ def api_video():
     if not camera_on:
         return err("camera is off", 409)
 
-    def generate():
-        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+    def gen():
         while camera_on:
             frame = camera.get_frame()
             if frame is None:
                 time.sleep(0.01)
                 continue
-            ret, jpeg = cv2.imencode(".jpg", frame, encode_params)
+            ret, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             if not ret:
                 continue
             yield (
@@ -940,7 +993,7 @@ def api_video():
                 b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
             )
 
-    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.route("/api/camera/settings", methods=["POST"])
@@ -963,6 +1016,7 @@ def api_camera_settings():
         }
     )
 
+
 @app.route("/api/camera/config", methods=["GET", "POST"])
 def api_camera_config():
     global camera_on
@@ -977,13 +1031,10 @@ def api_camera_config():
             }
         )
 
-    # POST: update (fps and optionally width/height)
     body = request.get_json(silent=True) or {}
-
     width = body.get("width", camera.width)
     height = body.get("height", camera.height)
     fps = body.get("fps", camera.fps)
-
     try:
         width = int(width)
         height = int(height)
@@ -991,12 +1042,10 @@ def api_camera_config():
     except Exception:
         return err("invalid width/height/fps", 400)
 
-    # clamp a bit to keep Pi happy
     width = max(80, min(1280, width))
     height = max(60, min(720, height))
     fps = max(1, min(60, fps))
 
-    # if camera is running, restart with new settings
     was_on = camera_on
     if was_on:
         camera.stop()
@@ -1011,7 +1060,7 @@ def api_camera_config():
             camera.start()
             camera_on = True
         except Exception as e:
-            logger.exception("Failed to restart camera with new config")
+            logger.exception("Failed to restart camera")
             return err(str(e), 500)
 
     return ok(
@@ -1023,34 +1072,30 @@ def api_camera_config():
         }
     )
 
-# ============================================================
-# Data: labeled clicks
-# ============================================================
 
-def _ensure_dataset(name: str):
-    path = os.path.join(DATASETS_ROOT, name)
-    os.makedirs(path, exist_ok=True)
-    return path
-
+# ============================================================
+# [8] Datasets & labeling
+# ============================================================
 
 @app.route("/api/datasets")
 def api_datasets():
-    names = []
-    for entry in sorted(os.listdir(DATASETS_ROOT)):
-        full = os.path.join(DATASETS_ROOT, entry)
+    ds = []
+    for name in sorted(os.listdir(DATASETS_ROOT)):
+        full = os.path.join(DATASETS_ROOT, name)
         if os.path.isdir(full):
-            names.append(entry)
-    return ok({"datasets": names, "current": current_dataset})
+            ds.append(name)
+    return ok({"datasets": ds, "current": current_dataset})
 
 
 @app.route("/api/datasets/select", methods=["POST"])
 def api_datasets_select():
     global current_dataset
     body = request.get_json(silent=True) or {}
-    name = body.get("name")
+    name = (body.get("name") or "").strip()
     if not name:
         return err("name required", 400)
-    _ensure_dataset(name)
+    full = os.path.join(DATASETS_ROOT, name)
+    os.makedirs(full, exist_ok=True)
     current_dataset = name
     return ok({"current": current_dataset})
 
@@ -1058,9 +1103,10 @@ def api_datasets_select():
 @app.route("/api/datasets/summary")
 def api_datasets_summary():
     name = request.args.get("name", current_dataset)
-    path = _ensure_dataset(name)
-    files = sorted(glob.glob(os.path.join(path, "*.jpg")))
-    count = len(files)
+    full = os.path.join(DATASETS_ROOT, name)
+    if not os.path.isdir(full):
+        return err("dataset not found", 404)
+    count = len([f for f in os.listdir(full) if f.lower().endswith(".jpg")])
     return ok({"name": name, "count": count})
 
 
@@ -1073,111 +1119,60 @@ def api_label_click():
         iw = float(body["image_width"])
         ih = float(body["image_height"])
     except Exception:
-        return err("x, y, image_width, image_height required", 400)
+        return err("x,y,image_width,image_height required", 400)
 
-    if not camera_on:
-        return err("camera off", 409)
-
-    raw = camera.get_raw()
-    if raw is None:
-        return err("no frame", 409)
-
-    h, w = raw.shape[:2]
-    # normalize click to [0,1], then to 0..149 label space
-    sx = x / max(iw, 1.0)
-    sy = y / max(ih, 1.0)
-    X = int(np.clip(round(sx * 149), 0, 149))
-    Y = int(np.clip(round(sy * 149), 0, 149))
-
-    ds_path = _ensure_dataset(current_dataset)
-    ts = int(time.time() * 1000)
     tag = str(body.get("tag", "click"))
+
+    frame = camera.get_raw()
+    if frame is None:
+        return err("no camera frame", 409)
+
+    h, w = frame.shape[:2]
+    sx = max(0.0, min(1.0, x / max(1.0, iw)))
+    sy = max(0.0, min(1.0, y / max(1.0, ih)))
+
+    X = int(round(sx * 149))
+    Y = int(round(sy * 149))
+    X = max(0, min(149, X))
+    Y = max(0, min(149, Y))
+
+    ds_dir = os.path.join(DATASETS_ROOT, current_dataset)
+    os.makedirs(ds_dir, exist_ok=True)
+    ts = int(time.time() * 1000)
     fname = f"x{X:03d}_y{Y:03d}_{tag}_{ts}.jpg"
-    full = os.path.join(ds_path, fname)
-    cv2.imwrite(full, raw)
-    logger.info("Saved labeled frame: %s", full)
+    path = os.path.join(ds_dir, fname)
+    cv2.imwrite(path, frame)
 
-    return ok({"file": os.path.relpath(full, ROOT), "X": X, "Y": Y})
+    return ok({"file": fname, "X": X, "Y": Y, "dataset": current_dataset})
 
 
 # ============================================================
-# Logging (stub)
+# [9] Logging stub
 # ============================================================
+
+log_session = {"active": False, "rate_hz": 0.0, "tag": ""}
+
 
 @app.route("/api/log/start", methods=["POST"])
 def api_log_start():
     body = request.get_json(silent=True) or {}
-    rate_hz = float(body.get("rate_hz", 5.0))
+    rate = float(body.get("rate_hz", 5.0))
     tag = str(body.get("tag", "auto"))
-    # stub for now
-    return ok({"msg": "logging stub", "rate_hz": rate_hz, "tag": tag})
+    log_session["active"] = True
+    log_session["rate_hz"] = rate
+    log_session["tag"] = tag
+    return ok(log_session.copy())
 
 
 @app.route("/api/log/stop", methods=["POST"])
 def api_log_stop():
-    return ok({"msg": "logging stopped (stub)"})
+    log_session["active"] = False
+    return ok(log_session.copy())
 
 
 # ============================================================
-# Motor routes (openloop)
+# [10] Motor routes
 # ============================================================
-
-@app.route("/api/control/params", methods=["GET", "POST"])
-def api_control_params():
-    global control_params
-    if request.method == "GET":
-        with control_lock:
-            return ok(
-                {
-                    "hz": control_params.get("hz", CONTROL_DEFAULT_HZ),
-                    "alpha": control_params.get("alpha", CONTROL_DEFAULT_ALPHA),
-                    "left_trim": control_params.get("left_trim", TRIM_DEFAULT_LEFT),
-                    "right_trim": control_params.get("right_trim", TRIM_DEFAULT_RIGHT),
-                    "throttle_expo": control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE),
-                }
-            )
-
-    # POST: update
-    body = request.get_json(silent=True) or {}
-
-    hz = body.get("hz", control_params.get("hz", CONTROL_DEFAULT_HZ))
-    alpha = body.get("alpha", control_params.get("alpha", CONTROL_DEFAULT_ALPHA))
-    left_trim = body.get("left_trim", control_params.get("left_trim", TRIM_DEFAULT_LEFT))
-    right_trim = body.get("right_trim", control_params.get("right_trim", TRIM_DEFAULT_RIGHT))
-    throttle_expo = body.get("throttle_expo", control_params.get("throttle_expo", EXPO_DEFAULT_THROTTLE))
-
-    try:
-        hz = float(hz)
-        alpha = float(alpha)
-        left_trim = float(left_trim)
-        right_trim = float(right_trim)
-        throttle_expo = float(throttle_expo)
-    except Exception:
-        return err("invalid control params", 400)
-
-    # clamp
-    hz = max(5.0, min(200.0, hz))
-    alpha = max(0.0, min(1.0, alpha))
-    left_trim = max(0.5, min(1.5, left_trim))
-    right_trim = max(0.5, min(1.5, right_trim))
-    throttle_expo = max(0.5, min(3.0, throttle_expo))
-
-    with control_lock:
-        control_params["hz"] = hz
-        control_params["alpha"] = alpha
-        control_params["left_trim"] = left_trim
-        control_params["right_trim"] = right_trim
-        control_params["throttle_expo"] = throttle_expo
-
-    return ok(
-        {
-            "hz": hz,
-            "alpha": alpha,
-            "left_trim": left_trim,
-            "right_trim": right_trim,
-            "throttle_expo": throttle_expo,
-        }
-    )
 
 @app.route("/api/motors/openloop", methods=["POST"])
 def api_motors_openloop():
@@ -1188,9 +1183,8 @@ def api_motors_openloop():
     except Exception:
         return err("invalid left/right", 400)
 
-    # bidirectional: clamp to [-1.0, 1.0]
-    left = max(-1.0, min(1.0, left))
-    right = max(-1.0, min(1.0, right))
+    left = max(0.0, min(1.0, left))
+    right = max(0.0, min(1.0, right))
 
     with control_lock:
         control_state["left_target"] = left
@@ -1201,84 +1195,79 @@ def api_motors_openloop():
 
 @app.route("/api/motors/stop", methods=["POST"])
 def api_motors_stop():
-    try:
-        with control_lock:
-            control_state["left_target"] = 0.0
-            control_state["right_target"] = 0.0
-        motors.stop()
-        return ok({"stopped": True})
-    except Exception as e:
-        logger.exception("stop failed")
-        return err(str(e), 500)
+    with control_lock:
+        control_state["left_target"] = 0.0
+        control_state["right_target"] = 0.0
+    motors.stop()
+    return ok({"stopped": True})
 
 
 # ============================================================
-# Train (stub) + Deploy (stub autopilot)
+# [11] Train stub
 # ============================================================
+
+def _train_loop(dataset: str, epochs: int, lr: float, batch_size: int):
+    train_status["running"] = True
+    train_status["epoch"] = 0
+    train_status["epochs"] = epochs
+    train_status["note"] = f"stub training on {dataset}"
+    losses = []
+
+    for e in range(1, epochs + 1):
+        if not train_status["running"]:
+            break
+        time.sleep(0.5)
+        loss = max(0.01, 1.0 / e)
+        losses.append(loss)
+        train_status["epoch"] = e
+        train_status["loss"] = loss
+
+    train_status["running"] = False
+    train_status["note"] = "finished stub training"
+    logger.info("Stub training finished: %s", losses)
+
 
 @app.route("/api/train/start", methods=["POST"])
 def api_train_start():
-    global train_status
     if train_status["running"]:
         return err("training already running", 409)
-
     body = request.get_json(silent=True) or {}
-    dataset = body.get("dataset", current_dataset)
+    dataset = (body.get("dataset") or current_dataset).strip()
     epochs = int(body.get("epochs", 10))
-
-    def _run():
-        global train_status
-        train_status = {
-            "running": True,
-            "epoch": 0,
-            "epochs": epochs,
-            "loss": None,
-            "note": f"stub train on {dataset}",
-        }
-        for e in range(epochs):
-            time.sleep(0.3)
-            train_status["epoch"] = e + 1
-            train_status["loss"] = float(np.exp(-0.2 * e))  # fake curve
-        train_status["running"] = False
-        train_status["note"] = "done (stub)"
-
-    t = threading.Thread(target=_run, daemon=True)
+    lr = float(body.get("lr", 0.001))
+    batch_size = int(body.get("batch_size", 32))
+    t = threading.Thread(
+        target=_train_loop,
+        args=(dataset, epochs, lr, batch_size),
+        daemon=True,
+    )
     t.start()
-    return ok({"status": "started", "dataset": dataset, "epochs": epochs})
+    return ok(
+        {
+            "dataset": dataset,
+            "epochs": epochs,
+            "lr": lr,
+            "batch_size": batch_size,
+            "running": True,
+        }
+    )
 
 
 @app.route("/api/train/status")
 def api_train_status():
-    return ok(train_status)
+    return ok(train_status.copy())
 
+
+# ============================================================
+# [12] Deploy stub (autopilot stub)
+# ============================================================
 
 def _autopilot_loop():
-    logger.info("[autopilot] loop started")
+    logger.info("Autopilot stub started")
     while deploy_status["autopilot"]:
-        if deploy_status["drive_motors"]:
-            throttle_gain = deploy_status["gains"].get("throttle_gain", 1.0)
-            throttle = 0.3 * throttle_gain
-            throttle = max(0.0, min(1.0, throttle))
-
-            # Straight for now; later plug in (x,y) → steering here
-            left_cmd = throttle
-            right_cmd = throttle
-
-            with control_lock:
-                control_state["left_target"] = left_cmd
-                control_state["right_target"] = right_cmd
-        else:
-            with control_lock:
-                control_state["left_target"] = 0.0
-                control_state["right_target"] = 0.0
-
-        time.sleep(0.1)
-
-    # ensure stop at end
-    with control_lock:
-        control_state["left_target"] = 0.0
-        control_state["right_target"] = 0.0
-    logger.info("[autopilot] loop stopped")
+        time.sleep(0.2)
+        # could update some fake internal state here
+    logger.info("Autopilot stub stopped")
 
 
 @app.route("/api/deploy/start", methods=["POST"])
@@ -1289,52 +1278,44 @@ def api_deploy_start():
     deploy_status["autopilot"] = True
     _autopilot_thread = threading.Thread(target=_autopilot_loop, daemon=True)
     _autopilot_thread.start()
-    return ok({"autopilot": True})
+    return ok(deploy_status.copy())
 
 
 @app.route("/api/deploy/stop", methods=["POST"])
 def api_deploy_stop():
     deploy_status["autopilot"] = False
-    return ok({"autopilot": False})
+    return ok(deploy_status.copy())
 
 
 @app.route("/api/deploy/status")
 def api_deploy_status():
-    return ok(deploy_status)
+    return ok(deploy_status.copy())
 
 
 @app.route("/api/deploy/gains", methods=["POST"])
 def api_deploy_gains():
     body = request.get_json(silent=True) or {}
-    throttle_gain = float(body.get("throttle_gain", deploy_status["gains"]["throttle_gain"]))
-    steering_gain = float(body.get("steering_gain", deploy_status["gains"]["steering_gain"]))
-    expo = float(body.get("expo", deploy_status["gains"]["expo"]))
-    drive_motors = bool(body.get("drive_motors", deploy_status["drive_motors"]))
-
-    deploy_status["gains"].update(
-        throttle_gain=throttle_gain,
-        steering_gain=steering_gain,
-        expo=expo,
-    )
-    deploy_status["drive_motors"] = drive_motors
-    return ok(deploy_status)
+    g = deploy_status["gains"]
+    if "throttle_gain" in body:
+        g["throttle_gain"] = float(body["throttle_gain"])
+    if "steering_gain" in body:
+        g["steering_gain"] = float(body["steering_gain"])
+    if "expo" in body:
+        g["expo"] = float(body["expo"])
+    if "drive_motors" in body:
+        deploy_status["drive_motors"] = bool(body["drive_motors"])
+    return ok(deploy_status.copy())
 
 
 # ============================================================
-# Cleanup
+# [13] Cleanup & main entry
 # ============================================================
 
 @atexit.register
 def _cleanup():
-    logger.info("Cleanup: shutting down motors and camera...")
+    logger.info("Shutting down AI Car server...")
     try:
         deploy_status["autopilot"] = False
-    except Exception:
-        pass
-    try:
-        with control_lock:
-            control_state["left_target"] = 0.0
-            control_state["right_target"] = 0.0
     except Exception:
         pass
     try:
@@ -1345,21 +1326,11 @@ def _cleanup():
         camera.stop()
     except Exception:
         pass
-    logger.info("Cleanup complete.")
+    logger.info("Cleanup complete")
 
-
-# ============================================================
-# Entry
-# ============================================================
 
 if __name__ == "__main__":
-    server_cfg = CONFIG.get("server", {})
-    host = server_cfg.get("host", "0.0.0.0")
-    port = int(server_cfg.get("port", 8888))
-
-    # start motor control loop
-    t_motor = threading.Thread(target=motor_loop, daemon=True)
-    t_motor.start()
-
-    logger.info("Starting AI Car server on %s:%d ...", host, port)
+    host = CONFIG["server"].get("host", "0.0.0.0")
+    port = int(CONFIG["server"].get("port", 8888))
+    logger.info("Starting Flask on %s:%d", host, port)
     app.run(host=host, port=port, threaded=True)
