@@ -1,6 +1,5 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>AI Car Studio</title>
@@ -17,9 +16,7 @@
       --pill-bg: rgba(255, 255, 255, 0.05);
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
@@ -33,20 +30,12 @@
         var(--bg);
     }
 
-    h1 {
-      margin: 0 0 10px 0;
-      font-size: 24px;
-      letter-spacing: 0.03em;
-    }
+    h1 { margin: 0 0 10px 0; font-size: 24px; letter-spacing: 0.03em; }
+    h2 { margin-top: 0; font-size: 18px; }
+    h3 { margin-top: 0; font-size: 16px; }
+    h4 { margin-top: 0; font-size: 14px; }
 
-    h2 {
-      margin-top: 0;
-      font-size: 18px;
-    }
-
-    p {
-      color: var(--text-soft);
-    }
+    p { color: var(--text-soft); }
 
     .app-header {
       display: flex;
@@ -115,9 +104,7 @@
       margin-bottom: 12px;
     }
 
-    .tab-content.active {
-      display: block;
-    }
+    .tab-content.active { display: block; }
 
     button {
       margin: 3px;
@@ -143,12 +130,12 @@
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
       border-color: transparent;
       color: #fff;
-      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 12px 24px rgba(0, 0, 0, 0.7);
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.03),
+        0 12px 24px rgba(0, 0, 0, 0.7);
     }
 
-    button.primary:hover {
-      filter: brightness(1.08);
-    }
+    button.primary:hover { filter: brightness(1.08); }
 
     input[type="number"],
     input[type="text"],
@@ -163,22 +150,11 @@
       min-width: 60px;
     }
 
-    input[type="text"] {
-      width: 160px;
-    }
+    input[type="text"] { width: 160px; }
+    input[type="checkbox"] { margin-right: 4px; }
+    select { min-width: 120px; }
 
-    input[type="checkbox"] {
-      margin-right: 4px;
-    }
-
-    select {
-      min-width: 120px;
-    }
-
-    label {
-      font-size: 13px;
-      color: var(--text-soft);
-    }
+    label { font-size: 13px; color: var(--text-soft); }
 
     #video {
       border-radius: 12px;
@@ -191,8 +167,7 @@
       cursor: crosshair;
     }
 
-    pre,
-    textarea {
+    pre, textarea {
       width: 100%;
       box-sizing: border-box;
       background: #050510;
@@ -260,24 +235,18 @@
       background: #9ca3ff;
     }
 
-    .pill-ok .pill-dot {
-      background: #4ade80;
-    }
-
-    .pill-bad .pill-dot {
-      background: #f97373;
-    }
-
-    .left-col,
-    .right-col {
-      flex: 1 1 0;
-      min-width: 0;
-    }
+    .pill-ok .pill-dot { background: #4ade80; }
+    .pill-bad .pill-dot { background: #f97373; }
 
     .split {
       display: flex;
       flex-wrap: wrap;
       gap: 14px;
+    }
+
+    .left-col, .right-col {
+      flex: 1 1 0;
+      min-width: 0;
     }
 
     hr.soft {
@@ -287,9 +256,7 @@
     }
 
     /* Joystick */
-    #joystick-wrapper {
-      margin-top: 4px;
-    }
+    #joystick-wrapper { margin-top: 4px; }
 
     #joystick-base {
       width: 180px;
@@ -342,12 +309,6 @@
       max-width: 220px;
     }
 
-    @media (max-width: 900px) {
-      .split {
-        flex-direction: column;
-      }
-    }
-
     #click-marker {
       position: absolute;
       width: 10px;
@@ -359,9 +320,12 @@
       pointer-events: none;
       display: none;
     }
+
+    @media (max-width: 900px) {
+      .split { flex-direction: column; }
+    }
   </style>
 </head>
-
 <body>
   <div class="app-header">
     <div>
@@ -372,7 +336,7 @@
     </div>
     <div>
       <span class="badge">Raspberry Pi • v2 UI</span>
-      <span id="cam-fps" class="pill-like-metric">FPS: --</span>
+      <span id="cam-fps" class="pill"><span class="pill-dot"></span> FPS: --</span>
     </div>
   </div>
 
@@ -404,7 +368,7 @@
             <span class="pill-dot"></span> selected: none
           </span>
         </div>
-        <div class="fs-list" id="fs-list"></div>
+        <div id="fs-list" class="fs-list"></div>
       </div>
       <div class="right-col">
         <h2>Editor</h2>
@@ -422,7 +386,6 @@
   <!-- IMAGE TAB -->
   <div id="tab-image" class="tab-content">
     <h2>Image & Data</h2>
-
     <div class="split">
       <div class="left-col">
         <h3>Camera</h3>
@@ -447,7 +410,6 @@
           <label><input id="vflip" type="checkbox" onchange="updateProc()">V Flip</label>
           <label><input id="hflip" type="checkbox" onchange="updateProc()">H Flip</label>
           <label><input id="gray" type="checkbox" onchange="updateProc()">Gray</label>
-
           <label>Mode:
             <select id="proc-mode" onchange="updateProc()">
               <option value="raw">raw</option>
@@ -455,7 +417,6 @@
               <option value="edges">edges</option>
             </select>
           </label>
-
           <label>Gamma:
             <input id="gamma" type="number" step="0.1" value="1.0" min="0.5" max="2.0" onchange="updateProc()">
           </label>
@@ -490,7 +451,6 @@
             <span class="pill-dot"></span> current: ?
           </span>
         </div>
-
         <pre id="dataset-summary" style="margin-top:6px;font-size:11px;max-height:120px;overflow:auto;"></pre>
 
         <hr class="soft">
@@ -509,15 +469,14 @@
           <div>
             <div class="row">
               <label>Left:
-                <input id="left" type="number" step="0.1" value="0.0" min="-1" max="1">
+                <input id="left" type="number" step="0.1" value="0.0" min="0" max="1">
               </label>
             </div>
             <div class="row">
               <label>Right:
-                <input id="right" type="number" step="0.1" value="0.0" min="-1" max="1">
+                <input id="right" type="number" step="0.1" value="0.0" min="0" max="1">
               </label>
             </div>
-
             <div class="row">
               <label>Speed gain:
                 <input id="joy-speed" type="number" step="0.1" value="0.8" min="0" max="1">
@@ -536,12 +495,10 @@
             </div>
             <div class="row">
               <label>Left trim:
-                <input id="ctrl-left-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00"
-                  style="width:70px;">
+                <input id="ctrl-left-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00" style="width:70px;">
               </label>
               <label>Right trim:
-                <input id="ctrl-right-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00"
-                  style="width:70px;">
+                <input id="ctrl-right-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00" style="width:70px;">
               </label>
             </div>
             <div class="row">
@@ -586,7 +543,7 @@
   <div id="tab-train" class="tab-content">
     <h2>Train</h2>
     <p style="font-size:13px;">
-      Currently this is a stub trainer that simulates training. Later we plug in your tiny CNN for (x,y) regression.
+      Stub trainer that simulates training. Later you can plug in your CNN.
     </p>
     <div class="row">
       <label>Dataset:
@@ -618,7 +575,6 @@
       <button onclick="stopAutopilot()">Stop</button>
       <button onclick="pollDeployStatus()">Refresh Status</button>
     </div>
-
     <div class="row">
       <label>Throttle gain:
         <input id="deploy-throttle" type="number" step="0.1" value="1.0">
@@ -634,12 +590,25 @@
       </label>
       <button onclick="updateDeployGains()">Apply</button>
     </div>
-
     <pre id="deploy-status"></pre>
   </div>
 
   <script>
-    // ---------- Tabs ----------
+    // =====================================================
+    // AI CAR FRONTEND – SECTION MAP
+    // [A] Tabs + layout
+    // [B] File manager
+    // [C] Health poll (FPS)
+    // [D] Camera & labeling
+    // [E] Datasets
+    // [F] Motors: manual & logging
+    // [G] Motors: joystick
+    // [H] Train
+    // [I] Deploy
+    // [J] Bootstrap
+    // =====================================================
+
+    // [A] Tabs + layout
     const tabButtons = document.querySelectorAll(".tab-btn");
     const tabContents = document.querySelectorAll(".tab-content");
 
@@ -651,7 +620,7 @@
       });
     });
 
-    // ---------- File tab ----------
+    // [B] File manager
     let fsSelectedPath = null;
 
     async function fsList() {
@@ -686,9 +655,7 @@
       fsSelectedPath = rel;
       document.getElementById("fs-selected").innerHTML =
         '<span class="pill-dot pill-ok"></span> selected: ' + rel;
-      if (!entry.is_dir) {
-        fsOpen(rel);
-      }
+      if (!entry.is_dir) fsOpen(rel);
     }
 
     async function fsOpen(path) {
@@ -707,7 +674,7 @@
       const pill = document.getElementById("fs-edit-path");
       const text = pill.textContent || "";
       const parts = text.split(/\s+/);
-      const path = parts.slice(1).join(" ").trim(); // after dot
+      const path = parts.slice(1).join(" ").trim();
       if (!path || path === "no file") {
         alert("No file selected");
         return;
@@ -719,11 +686,8 @@
         body: JSON.stringify({ path, content })
       });
       const data = await res.json();
-      if (!data.ok) {
-        alert("Save error: " + data.error);
-      } else {
-        alert("Saved: " + path);
-      }
+      if (!data.ok) alert("Save error: " + data.error);
+      else alert("Saved: " + path);
     }
 
     async function fsNewFile() {
@@ -771,41 +735,48 @@
       fsList();
     }
 
-    // ---------- Health polling (camera FPS badge) ----------
+    // [C] Health poll (FPS)
     async function pollHealth() {
       try {
         const res = await fetch("/api/health");
         const data = await res.json();
-        if (data.ok) {
-          document.getElementById("cam-fps").innerText =
-            "FPS: " + data.data.camera_fps.toFixed(1);
+        if (!data.ok) return;
+        const fps = data.data.camera_fps || 0.0;
+        document.getElementById("cam-fps").innerHTML =
+          '<span class="pill-dot"></span> FPS: ' + fps.toFixed(1);
+        const status = document.getElementById("cam-status");
+        if (status) {
+          const on = data.data.camera_on;
+          const backend = data.data.camera_backend || "none";
+          status.innerHTML =
+            '<span class="pill-dot ' + (on ? 'pill-ok' : 'pill-bad') +
+            '"></span> Camera: ' + (on ? 'ON' : 'OFF') + ' (' + backend + ')';
         }
-      } catch (e) { }
+      } catch (e) {}
     }
     setInterval(pollHealth, 1000);
-    pollHealth();
 
-    // ---------- Image tab: camera ----------
+    // [D] Camera & labeling
     async function startCamera() {
       const res = await fetch("/api/camera/start", { method: "POST" });
       const data = await res.json();
-      if (data.ok) {
-        document.getElementById("cam-status").innerHTML =
-          '<span class="pill-dot pill-ok"></span> Camera: ON (' + (data.data.backend || "unknown") + ')';
-        document.getElementById("video").src = "/api/video?ts=" + Date.now();
-      } else {
+      if (!data.ok) {
         alert("Failed to start camera: " + data.error);
+        return;
       }
+      document.getElementById("cam-status").innerHTML =
+        '<span class="pill-dot pill-ok"></span> Camera: ON (' +
+        (data.data.backend || "unknown") + ')';
+      document.getElementById("video").src = "/api/video?ts=" + Date.now();
     }
 
     async function stopCamera() {
       const res = await fetch("/api/camera/stop", { method: "POST" });
       const data = await res.json();
-      if (data.ok) {
-        document.getElementById("cam-status").innerHTML =
-          '<span class="pill-dot pill-bad"></span> Camera: OFF';
-        document.getElementById("video").src = "";
-      }
+      if (!data.ok) return;
+      document.getElementById("cam-status").innerHTML =
+        '<span class="pill-dot pill-bad"></span> Camera: OFF';
+      document.getElementById("video").src = "";
     }
 
     async function loadCameraConfig() {
@@ -814,26 +785,15 @@
         const data = await res.json();
         if (!data.ok) return;
         const cfg = data.data;
-        const fpsInput = document.getElementById("cam-fps-input");
-        if (fpsInput) {
-          fpsInput.value = cfg.fps ?? 15;
-        }
-        const status = document.getElementById("cam-config-status");
-        if (status) {
-          status.innerHTML =
-            '<span class="pill-dot"></span> ' +
-            'fps: ' + (cfg.fps ?? "--") +
-            ', ' + (cfg.width ?? "?") + 'x' + (cfg.height ?? "?");
-        }
-      } catch (e) {
-        // ignore for now
-      }
+        document.getElementById("cam-fps-input").value = cfg.fps ?? 15;
+        document.getElementById("cam-config-status").innerHTML =
+          '<span class="pill-dot"></span> fps: ' + (cfg.fps ?? "--") +
+          ', ' + (cfg.width ?? "?") + 'x' + (cfg.height ?? "?");
+      } catch (e) {}
     }
 
     async function applyCameraConfig() {
-      const fpsInput = document.getElementById("cam-fps-input");
-      if (!fpsInput) return;
-      let fps = parseInt(fpsInput.value || "0", 10);
+      const fps = parseInt(document.getElementById("cam-fps-input").value || "0", 10);
       if (!fps || fps <= 0) {
         alert("Invalid FPS");
         return;
@@ -850,19 +810,11 @@
           return;
         }
         const cfg = data.data;
-        const status = document.getElementById("cam-config-status");
-        if (status) {
-          status.innerHTML =
-            '<span class="pill-dot pill-ok"></span> ' +
-            'fps: ' + cfg.fps +
-            ', ' + cfg.width + 'x' + cfg.height;
-        }
-        // refresh stream if camera is on
+        document.getElementById("cam-config-status").innerHTML =
+          '<span class="pill-dot pill-ok"></span> fps: ' + cfg.fps +
+          ', ' + cfg.width + 'x' + cfg.height;
         if (cfg.camera_on) {
-          const img = document.getElementById("video");
-          if (img && img.src) {
-            img.src = "/api/video?ts=" + Date.now();
-          }
+          document.getElementById("video").src = "/api/video?ts=" + Date.now();
         }
       } catch (e) {
         alert("Camera config error: " + e);
@@ -870,8 +822,7 @@
     }
 
     async function snapshot() {
-      const img = document.getElementById("video");
-      img.src = "/api/camera/frame?ts=" + Date.now();
+      document.getElementById("video").src = "/api/camera/frame?ts=" + Date.now();
     }
 
     async function updateProc() {
@@ -880,7 +831,7 @@
         hflip: document.getElementById("hflip").checked,
         gray: document.getElementById("gray").checked,
         mode: document.getElementById("proc-mode").value,
-        gamma: parseFloat(document.getElementById("gamma").value || "1.0"),
+        gamma: parseFloat(document.getElementById("gamma").value || "1.0")
       };
       await fetch("/api/camera/settings", {
         method: "POST",
@@ -897,10 +848,8 @@
       const y = e.clientY - rect.top;
 
       const marker = document.getElementById("click-marker");
-      const px = (x / rect.width) * 100;
-      const py = (y / rect.height) * 100;
-      marker.style.left = px + "%";
-      marker.style.top = py + "%";
+      marker.style.left = (x / rect.width) * 100 + "%";
+      marker.style.top = (y / rect.height) * 100 + "%";
       marker.style.display = "block";
 
       const body = {
@@ -917,15 +866,15 @@
       const data = await res.json();
       if (!data.ok) {
         alert("Label save error: " + data.error);
-      } else {
-        const X = data.data.X;
-        const Y = data.data.Y;
-        document.getElementById("last-label").innerHTML =
-          '<span class="pill-dot pill-ok"></span> last label: X=' + X + ', Y=' + Y;
+        return;
       }
+      const X = data.data.X;
+      const Y = data.data.Y;
+      document.getElementById("last-label").innerHTML =
+        '<span class="pill-dot pill-ok"></span> last label: X=' + X + ', Y=' + Y;
     });
 
-    // ---------- Datasets ----------
+    // [E] Datasets
     async function refreshDatasets() {
       const res = await fetch("/api/datasets");
       const data = await res.json();
@@ -979,27 +928,27 @@
       el.textContent = JSON.stringify(data.data, null, 2);
     }
 
-    // ---------- Motor control: debounced sending ----------
+    // [F] Motors: manual & logging
     const JOY_DEADZONE = 0.1;
-    let joystickActive = false;
-
     let desiredLeft = 0.0;
     let desiredRight = 0.0;
     let lastSentLeft = 0.0;
     let lastSentRight = 0.0;
     let sendInFlight = false;
 
+    function sendOpenloop(left, right) {
+      desiredLeft = Math.max(0, Math.min(1, left));
+      desiredRight = Math.max(0, Math.min(1, right));
+    }
+
     async function sendMotorLoop() {
-      // 20 Hz loop; only sends if there's meaningful change
       const dl = Math.abs(desiredLeft - lastSentLeft);
       const dr = Math.abs(desiredRight - lastSentRight);
       if (dl < 0.01 && dr < 0.01) return;
       if (sendInFlight) return;
-
       sendInFlight = true;
       lastSentLeft = desiredLeft;
       lastSentRight = desiredRight;
-
       try {
         await fetch("/api/motors/openloop", {
           method: "POST",
@@ -1007,29 +956,49 @@
           body: JSON.stringify({ left: desiredLeft, right: desiredRight })
         });
       } catch (e) {
-        // ignore
       } finally {
         sendInFlight = false;
       }
     }
-
-    // run at ~20 Hz
-    setInterval(sendMotorLoop, 50);
+    setInterval(sendMotorLoop, 50); // 20 Hz
 
     async function applyDirectMotors() {
       const left = parseFloat(document.getElementById("left").value || "0");
       const right = parseFloat(document.getElementById("right").value || "0");
-      desiredLeft = left;
-      desiredRight = right;
+      sendOpenloop(left, right);
     }
 
     async function stopMotors() {
-      desiredLeft = 0.0;
-      desiredRight = 0.0;
+      sendOpenloop(0, 0);
       await fetch("/api/motors/stop", { method: "POST" });
       document.getElementById("left").value = "0.0";
       document.getElementById("right").value = "0.0";
       resetJoystick();
+    }
+
+    async function startLogging() {
+      const rate = parseFloat(document.getElementById("log-rate").value || "5");
+      const tag = document.getElementById("log-tag").value || "auto";
+      const res = await fetch("/api/log/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rate_hz: rate, tag })
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Logging error: " + data.error);
+        return;
+      }
+      document.getElementById("log-status").innerHTML =
+        '<span class="pill-dot pill-ok"></span> logging: on @ ' + data.data.rate_hz + ' Hz';
+    }
+
+    async function stopLogging() {
+      const res = await fetch("/api/log/stop", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) return;
+      document.getElementById("log-status").innerHTML =
+        '<span class="pill-dot"></span> logging: off';
     }
 
     async function loadControlParams() {
@@ -1038,254 +1007,177 @@
         const data = await res.json();
         if (!data.ok) return;
         const p = data.data;
-
-        const hzInput = document.getElementById("ctrl-hz");
-        const aInput = document.getElementById("ctrl-alpha");
-        const lInput = document.getElementById("ctrl-left-trim");
-        const rInput = document.getElementById("ctrl-right-trim");
-        const eInput = document.getElementById("ctrl-expo");
-
-        if (hzInput) hzInput.value = p.hz ?? 100;
-        if (aInput) aInput.value = p.alpha ?? 0.35;
-        if (lInput) lInput.value = p.left_trim ?? 1.0;
-        if (rInput) rInput.value = p.right_trim ?? 1.0;
-        if (eInput) eInput.value = p.throttle_expo ?? 1.3;
-
-        const status = document.getElementById("ctrl-status");
-        if (status) {
-          status.innerHTML =
-            '<span class="pill-dot"></span> ' +
-            'Hz ' + (p.hz ?? "--") +
-            ' • α ' + (p.alpha ?? "--") +
-            ' • L ' + (p.left_trim ?? "--") +
-            ' • R ' + (p.right_trim ?? "--") +
-            ' • expo ' + (p.throttle_expo ?? "--");
-        }
-      } catch (e) {
-        // ignore
-      }
+        document.getElementById("ctrl-hz").value = p.hz ?? 100;
+        document.getElementById("ctrl-alpha").value = p.alpha ?? 0.35;
+        document.getElementById("ctrl-left-trim").value = p.left_trim ?? 1.0;
+        document.getElementById("ctrl-right-trim").value = p.right_trim ?? 1.0;
+        document.getElementById("ctrl-expo").value = p.throttle_expo ?? 1.3;
+        document.getElementById("ctrl-status").innerHTML =
+          '<span class="pill-dot"></span> Hz ' + (p.hz ?? 0).toFixed(1) +
+          ' • α ' + (p.alpha ?? 0).toFixed(2) +
+          ' • L ' + (p.left_trim ?? 1).toFixed(2) +
+          ' • R ' + (p.right_trim ?? 1).toFixed(2) +
+          ' • expo ' + (p.throttle_expo ?? 1).toFixed(2);
+      } catch (e) {}
     }
 
     async function applyControlParams() {
-      const hzInput = document.getElementById("ctrl-hz");
-      const aInput = document.getElementById("ctrl-alpha");
-      const lInput = document.getElementById("ctrl-left-trim");
-      const rInput = document.getElementById("ctrl-right-trim");
-      const eInput = document.getElementById("ctrl-expo");
-
-      if (!hzInput || !aInput || !lInput || !rInput || !eInput) return;
-
-      let hz = parseFloat(hzInput.value || "100");
-      let alpha = parseFloat(aInput.value || "0.35");
-      let left_trim = parseFloat(lInput.value || "1.0");
-      let right_trim = parseFloat(rInput.value || "1.0");
-      let throttle_expo = parseFloat(eInput.value || "1.3");
-
-      if (!hz || hz <= 0) hz = 100;
-      if (alpha < 0) alpha = 0;
-      if (alpha > 1) alpha = 1;
-
-      try {
-        const res = await fetch("/api/control/params", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ hz, alpha, left_trim, right_trim, throttle_expo })
-        });
-        const data = await res.json();
-        if (!data.ok) {
-          alert("Control update error: " + data.error);
-          return;
-        }
-        const p = data.data;
-        const status = document.getElementById("ctrl-status");
-        if (status) {
-          status.innerHTML =
-            '<span class="pill-dot pill-ok"></span> ' +
-            'Hz ' + p.hz +
-            ' • α ' + p.alpha +
-            ' • L ' + p.left_trim +
-            ' • R ' + p.right_trim +
-            ' • expo ' + p.throttle_expo;
-        }
-      } catch (e) {
-        alert("Control update error: " + e);
-      }
-    }
-
-
-    // ---------- Logging (stub) ----------
-    async function startLogging() {
-      const rate_hz = parseFloat(document.getElementById("log-rate").value);
-      const tag = document.getElementById("log-tag").value;
-      const res = await fetch("/api/log/start", {
+      const hz = parseFloat(document.getElementById("ctrl-hz").value || "100");
+      const alpha = parseFloat(document.getElementById("ctrl-alpha").value || "0.35");
+      const lt = parseFloat(document.getElementById("ctrl-left-trim").value || "1.0");
+      const rt = parseFloat(document.getElementById("ctrl-right-trim").value || "1.0");
+      const expo = parseFloat(document.getElementById("ctrl-expo").value || "1.3");
+      const res = await fetch("/api/control/params", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rate_hz, tag })
+        body: JSON.stringify({
+          hz, alpha,
+          left_trim: lt,
+          right_trim: rt,
+          throttle_expo: expo
+        })
       });
       const data = await res.json();
-      if (data.ok) {
-        document.getElementById("log-status").innerHTML =
-          '<span class="pill-dot pill-ok"></span> logging: on (' +
-          data.data.rate_hz + ' Hz, ' + data.data.tag + ')';
-      } else {
-        alert("Log start error: " + data.error);
+      if (!data.ok) {
+        alert("Control config error: " + data.error);
+        return;
       }
+      const p = data.data;
+      document.getElementById("ctrl-status").innerHTML =
+        '<span class="pill-dot pill-ok"></span> Hz ' + (p.hz ?? 0).toFixed(1) +
+        ' • α ' + (p.alpha ?? 0).toFixed(2) +
+        ' • L ' + (p.left_trim ?? 1).toFixed(2) +
+        ' • R ' + (p.right_trim ?? 1).toFixed(2) +
+        ' • expo ' + (p.throttle_expo ?? 1).toFixed(2);
     }
 
-    async function stopLogging() {
-      await fetch("/api/log/stop", { method: "POST" });
-      document.getElementById("log-status").innerHTML =
-        '<span class="pill-dot"></span> logging: off';
+    // [G] Motors: joystick
+    let joystickActive = false;
+
+    function resetJoystick() {
+      const base = document.getElementById("joystick-base");
+      const handle = document.getElementById("joystick-handle");
+      if (!base || !handle) return;
+      handle.style.left = "50%";
+      handle.style.top = "50%";
+      joystickActive = false;
     }
 
-    // ---------- Joystick → left/right forward-only (UI side) ----------
+    function hardStopJoystick() {
+      resetJoystick();
+      document.getElementById("left").value = "0.0";
+      document.getElementById("right").value = "0.0";
+      sendOpenloop(0, 0);
+    }
+
     function setupJoystick() {
       const base = document.getElementById("joystick-base");
       const handle = document.getElementById("joystick-handle");
+      if (!base || !handle) return;
 
-      base.addEventListener("pointerdown", e => {
+      base.addEventListener("pointerdown", (e) => {
         joystickActive = true;
         base.setPointerCapture(e.pointerId);
         updateJoystick(e, base, handle);
       });
 
-      base.addEventListener("pointermove", e => {
+      base.addEventListener("pointermove", (e) => {
         if (!joystickActive) return;
         updateJoystick(e, base, handle);
       });
 
-      base.addEventListener("pointerup", e => {
+      function end(e) {
+        if (!joystickActive) return;
+        joystickActive = false;
         base.releasePointerCapture(e.pointerId);
         hardStopJoystick();
-      });
+      }
 
-      base.addEventListener("pointercancel", e => {
-        base.releasePointerCapture(e.pointerId);
+      base.addEventListener("pointerup", end);
+      base.addEventListener("pointercancel", end);
+      base.addEventListener("pointerleave", (e) => {
+        if (!joystickActive) return;
         hardStopJoystick();
       });
-
-      base.addEventListener("pointerleave", () => {
-        if (joystickActive) {
-          hardStopJoystick();
-        }
-      });
-
-      window.addEventListener("blur", () => {
-        if (joystickActive) {
-          hardStopJoystick();
-        }
-      });
-
-      document.addEventListener("visibilitychange", () => {
-        if (document.hidden && joystickActive) {
-          hardStopJoystick();
-        }
-      });
-    }
-
-    function resetJoystick() {
-      const handle = document.getElementById("joystick-handle");
-      handle.style.left = "50%";
-      handle.style.top = "50%";
     }
 
     function updateJoystick(e, base, handle) {
       const rect = base.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
-
       let dx = e.clientX - cx;
       let dy = e.clientY - cy;
 
-      const maxR = rect.width / 2;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > maxR) {
-        dx *= maxR / dist;
-        dy *= maxR / dist;
+      const radius = rect.width / 2;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const maxDist = radius;
+      if (dist > maxDist) {
+        const scale = maxDist / dist;
+        dx *= scale;
+        dy *= scale;
       }
 
-      // Normalized joystick coords [-1,1]
-      const nx = dx / maxR;   // left/right
-      const ny = dy / maxR;   // up/down
+      const nx = dx / maxDist;  // -1..1
+      const ny = dy / maxDist;  // -1..1
 
-      // Deadzone on the stick itself
+      handle.style.left = 50 + nx * 50 + "%";
+      handle.style.top = 50 + ny * 50 + "%";
+
       const mag = Math.sqrt(nx * nx + ny * ny);
       if (mag < JOY_DEADZONE) {
-        resetJoystick();
-        document.getElementById("left").value = "0.00";
-        document.getElementById("right").value = "0.00";
-        sendOpenloop(0.0, 0.0);
+        document.getElementById("left").value = "0.0";
+        document.getElementById("right").value = "0.0";
+        sendOpenloop(0, 0);
         return;
       }
 
-      // Move the handle visually
-      handle.style.left = (50 + nx * 50) + "%";
-      handle.style.top = (50 + ny * 50) + "%";
+      const speedGain = parseFloat(document.getElementById("joy-speed").value || "0.8");
+      const steerGain = parseFloat(document.getElementById("joy-steer").value || "0.7");
 
-      const speedGain = parseFloat(document.getElementById("joy-speed").value || "1.0");
-      const steerGain = parseFloat(document.getElementById("joy-steer").value || "1.0");
+      let forward = Math.max(0, -ny * speedGain); // up = forward
+      forward = Math.max(0, Math.min(1, forward));
 
-      // Up is forward. Forward-only (0..1)
-      let forward = -ny * speedGain;        // up = negative ny -> positive forward
-      if (forward < 0) forward = 0;
-      forward = Math.max(0.0, Math.min(1.0, forward));
-
-      // Steering in [-1,1]
-      let steer = -nx * steerGain;          // choose sign that feels natural
-      steer = Math.max(-1.0, Math.min(1.0, steer));
+      let steer = -nx * steerGain; // left = negative, right = positive
+      steer = Math.max(-1, Math.min(1, steer));
 
       let left, right;
 
-      // --- Case 1: almost no forward, but strong steering -> pivot-ish turn ---
-      if (forward < 0.05 && Math.abs(steer) > 0.15) {
-        // base turning speed (still 0..1)
-        const baseTurn = Math.min(0.4 + 0.4 * Math.abs(steer), 1.0);
+      if (forward < 0.05 && Math.abs(steer) > 0.2) {
+        // pivot-ish (but still forward-only: only one wheel moves)
+        const baseTurn = 0.4 + 0.6 * Math.min(1, Math.abs(steer));
         if (steer > 0) {
-          // turn right: left wheel moves, right almost stopped
+          // turn right: left wheel moves
           left = baseTurn;
           right = 0.0;
         } else {
-          // turn left: right wheel moves, left almost stopped
+          // turn left: right wheel moves
           left = 0.0;
           right = baseTurn;
         }
       } else {
-        // --- Case 2: normal differential while moving forward ---
-        // simple diff mixing, still within 0..1 after normalization
+        // differential mixing, forward-only
         left = forward * (1 - steer);
         right = forward * (1 + steer);
-
-        // Normalize if needed
-        const maxVal = Math.max(1.0, Math.abs(left), Math.abs(right));
-        left = left / maxVal;
-        right = right / maxVal;
-
-        // Clamp to [0,1] (forward-only system)
-        left = Math.max(0.0, Math.min(1.0, left));
-        right = Math.max(0.0, Math.min(1.0, right));
+        const maxV = Math.max(left, right, 1e-6);
+        if (maxV > 1) {
+          left /= maxV;
+          right /= maxV;
+        }
       }
 
-      // Tiny deadzone on outputs
-      if (left < 0.02) left = 0.0;
-      if (right < 0.02) right = 0.0;
+      if (Math.abs(left) < 0.02) left = 0;
+      if (Math.abs(right) < 0.02) right = 0;
+
+      left = Math.max(0, Math.min(1, left));
+      right = Math.max(0, Math.min(1, right));
 
       document.getElementById("left").value = left.toFixed(2);
       document.getElementById("right").value = right.toFixed(2);
 
-      sendOpenloop(left, right);  // stays in [0,1]
+      sendOpenloop(left, right);
     }
 
-
-    function hardStopJoystick() {
-      joystickActive = false;
-      resetJoystick();
-      document.getElementById("left").value = "0.0";
-      document.getElementById("right").value = "0.0";
-      desiredLeft = 0.0;
-      desiredRight = 0.0;
-    }
-
-    // ---------- Train tab ----------
+    // [H] Train
     async function refreshTrainDatasets() {
       const res = await fetch("/api/datasets");
       const data = await res.json();
@@ -1299,81 +1191,60 @@
         if (name === data.data.current) opt.selected = true;
         sel.appendChild(opt);
       });
-
-      const current = sel.value || data.data.current;
-      loadTrainDatasetSummary(current);
-      sel.onchange = () => loadTrainDatasetSummary(sel.value);
-    }
-
-    async function loadTrainDatasetSummary(name) {
-      if (!name) return;
-      const res = await fetch("/api/datasets/summary?name=" + encodeURIComponent(name));
-      const data = await res.json();
-      const el = document.getElementById("train-dataset-summary");
-      if (!data.ok) {
-        el.textContent = "Error: " + data.error;
-        return;
+      const current = data.data.current;
+      if (current) {
+        const summaryRes = await fetch("/api/datasets/summary?name=" + encodeURIComponent(current));
+        const summaryData = await summaryRes.json();
+        if (summaryData.ok) {
+          document.getElementById("train-dataset-summary").textContent =
+            JSON.stringify(summaryData.data, null, 2);
+        }
       }
-      el.textContent = JSON.stringify(data.data, null, 2);
     }
 
     async function startTrain() {
       const dataset = document.getElementById("train-dataset").value;
       const epochs = parseInt(document.getElementById("train-epochs").value || "10", 10);
-      const learning_rate = parseFloat(document.getElementById("train-lr").value || "0.001");
-      const batch_size = parseInt(document.getElementById("train-batch").value || "32", 10);
+      const lr = document.getElementById("train-lr").value || "0.001";
+      const batch = parseInt(document.getElementById("train-batch").value || "32", 10);
       const res = await fetch("/api/train/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataset, epochs, learning_rate, batch_size })
+        body: JSON.stringify({ dataset, epochs, lr, batch_size: batch })
       });
       const data = await res.json();
       if (!data.ok) {
-        alert("Train start error: " + data.error);
+        alert("Train error: " + data.error);
         return;
       }
+      document.getElementById("train-status").textContent = "Training started...\n";
       pollTrainStatus();
     }
 
     async function pollTrainStatus() {
       const res = await fetch("/api/train/status");
       const data = await res.json();
-      const el = document.getElementById("train-status");
-      if (!data.ok) {
-        el.textContent = "Error: " + data.error;
-        return;
-      }
-      el.textContent = JSON.stringify(data.data, null, 2);
-      if (data.data.running) {
+      if (!data.ok) return;
+      const s = data.data;
+      const txt = [
+        "running: " + s.running,
+        "epoch: " + s.epoch + " / " + s.epochs,
+        "loss: " + (s.loss == null ? "None" : s.loss.toFixed(4)),
+        "note: " + (s.note || "")
+      ].join("\n");
+      document.getElementById("train-status").textContent = txt;
+      if (s.running) {
         setTimeout(pollTrainStatus, 500);
       }
     }
 
-    // ---------- Deploy tab ----------
-    async function startAutopilot() {
-      const res = await fetch("/api/deploy/start", { method: "POST" });
-      const data = await res.json();
-      if (!data.ok) alert("Error: " + data.error);
-      pollDeployStatus();
-    }
-
-    async function stopAutopilot() {
-      const res = await fetch("/api/deploy/stop", { method: "POST" });
-      const data = await res.json();
-      if (!data.ok) alert("Error: " + data.error);
-      pollDeployStatus();
-    }
-
+    // [I] Deploy
     async function pollDeployStatus() {
       const res = await fetch("/api/deploy/status");
       const data = await res.json();
-      const el = document.getElementById("deploy-status");
-      if (!data.ok) {
-        el.textContent = "Error: " + data.error;
-        return;
-      }
-      el.textContent = JSON.stringify(data.data, null, 2);
-
+      if (!data.ok) return;
+      document.getElementById("deploy-status").textContent =
+        JSON.stringify(data.data, null, 2);
       const g = data.data.gains || {};
       document.getElementById("deploy-throttle").value = g.throttle_gain ?? 1.0;
       document.getElementById("deploy-steering").value = g.steering_gain ?? 1.0;
@@ -1381,12 +1252,31 @@
       document.getElementById("deploy-drive").checked = !!data.data.drive_motors;
     }
 
-    async function updateDeployGains() {
-      const throttle_gain = parseFloat(document.getElementById("deploy-throttle").value || "1.0");
-      const steering_gain = parseFloat(document.getElementById("deploy-steering").value || "1.0");
-      const expo = parseFloat(document.getElementById("deploy-expo").value || "1.0");
-      const drive_motors = document.getElementById("deploy-drive").checked;
+    async function startAutopilot() {
+      const res = await fetch("/api/deploy/start", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Autopilot error: " + data.error);
+        return;
+      }
+      pollDeployStatus();
+    }
 
+    async function stopAutopilot() {
+      const res = await fetch("/api/deploy/stop", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) {
+        alert("Autopilot stop error: " + data.error);
+        return;
+      }
+      pollDeployStatus();
+    }
+
+    async function updateDeployGains() {
+      const throttle_gain = parseFloat(document.getElementById("deploy-throttle").value || "1");
+      const steering_gain = parseFloat(document.getElementById("deploy-steering").value || "1");
+      const expo = parseFloat(document.getElementById("deploy-expo").value || "1");
+      const drive_motors = document.getElementById("deploy-drive").checked;
       const res = await fetch("/api/deploy/gains", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1394,13 +1284,13 @@
       });
       const data = await res.json();
       if (!data.ok) {
-        alert("Update gains error: " + data.error);
+        alert("Deploy gains error: " + data.error);
         return;
       }
       pollDeployStatus();
     }
 
-    // ---------- Bootstrap ----------
+    // [J] Bootstrap
     async function bootstrap() {
       fsList();
       refreshDatasets();
@@ -1408,23 +1298,11 @@
       setupJoystick();
       loadControlParams();
       loadCameraConfig();
-
-      const res = await fetch("/api/health");
-      const data = await res.json();
-      if (data.ok) {
-        document.getElementById("dataset-current").innerHTML =
-          '<span class="pill-dot"></span> current: ' + data.data.current_dataset;
-        if (data.data.camera_on) {
-          document.getElementById("cam-status").innerHTML =
-            '<span class="pill-dot pill-ok"></span> Camera: ON (' + data.data.camera_backend + ')';
-          document.getElementById("video").src = "/api/video?ts=" + Date.now();
-        }
-      }
+      pollHealth();
+      pollDeployStatus();
     }
 
     bootstrap();
   </script>
-
 </body>
-
 </html>
