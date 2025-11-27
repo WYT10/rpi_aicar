@@ -1192,20 +1192,22 @@
 
       let left, right;
 
-      if (forward < 0.05 && Math.abs(steer) > 0.2) {
-        // pivot-ish (but still forward-only: only one wheel moves)
+      const backward = ny > 0.05;  // below center = "back" region
+
+      if ((forward < 0.05 || backward) && Math.abs(steer) > 0.1 && mag > JOY_DEADZONE) {
+        // Pivot / spin mode (used in the back half and near-center)
         const baseTurn = 0.4 + 0.6 * Math.min(1, Math.abs(steer));
         if (steer > 0) {
-          // turn right: left wheel moves
+          // joystick right => car rotates right
           left = 0.0;
           right = baseTurn;
         } else {
-          // turn left: right wheel moves
+          // joystick left => car rotates left
           left = baseTurn;
           right = 0.0;
         }
       } else {
-        // differential mixing, forward-only
+        // Normal forward differential mixing
         left = forward * (1 - steer);
         right = forward * (1 + steer);
         const maxV = Math.max(left, right, 1e-6);
