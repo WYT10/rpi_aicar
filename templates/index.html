@@ -1170,6 +1170,7 @@
       const nx = dx / maxDist;  // -1..1
       const ny = dy / maxDist;  // -1..1
 
+      // move handle
       handle.style.left = 50 + nx * 50 + "%";
       handle.style.top = 50 + ny * 50 + "%";
 
@@ -1184,30 +1185,42 @@
       const speedGain = parseFloat(document.getElementById("joy-speed").value || "0.5");
       const steerGain = parseFloat(document.getElementById("joy-steer").value || "1");
 
-      let forward = Math.max(0, -ny * speedGain); // up = forward
+      // sign conventions:
+      // ny < 0 = up (forward), ny > 0 = down (back / spin zone)
+      // nx < 0 = left, nx > 0 = right
+      const forwardRaw = -ny;        // up = positive
+      let forward = forwardRaw * speedGain;
       forward = Math.max(0, Math.min(1, forward));
 
-      let steer = -nx * steerGain; // left = negative, right = positive
+      const steerRaw = -nx;          // left = positive, right = negative
+      let steer = steerRaw * steerGain;
       steer = Math.max(-1, Math.min(1, steer));
 
-      let left, right;
+      let left = 0;
+      let right = 0;
 
-      const backward = ny > 0.05;  // below center = "back" region
+      const inBackHalf = ny >= 0.05;
 
-      if ((forward < 0.05 || backward) && Math.abs(steer) > 0.1 && mag > JOY_DEADZONE) {
-        // Pivot / spin mode (used in the back half and near-center)
-        const baseTurn = 0.4 + 0.6 * Math.min(1, Math.abs(steer));
-        if (steer > 0) {
-          // joystick right => car rotates right
-          left = 0.0;
-          right = baseTurn;
+      if (inBackHalf) {
+        // ---- Bottom half: pure spin mode ----
+        if (Math.abs(steerRaw) < 0.1) {
+          // near center horizontally -> no motion
+          left = 0;
+          right = 0;
         } else {
-          // joystick left => car rotates left
-          left = baseTurn;
-          right = 0.0;
+          const baseTurn = 0.4 + 0.6 * Math.min(1, Math.abs(steerRaw));
+          if (steer > 0) {
+            // joystick left => car rotates left (right wheel moves)
+            left = 0.0;
+            right = baseTurn;
+          } else {
+            // joystick right => car rotates right (left wheel moves)
+            left = baseTurn;
+            right = 0.0;
+          }
         }
       } else {
-        // Normal forward differential mixing
+        // ---- Top half: normal forward differential drive ----
         left = forward * (1 - steer);
         right = forward * (1 + steer);
         const maxV = Math.max(left, right, 1e-6);
@@ -1217,9 +1230,11 @@
         }
       }
 
+      // small output deadzone
       if (Math.abs(left) < 0.02) left = 0;
       if (Math.abs(right) < 0.02) right = 0;
 
+      // clamp to [0,1] since motors are forward-only
       left = Math.max(0, Math.min(1, left));
       right = Math.max(0, Math.min(1, right));
 
