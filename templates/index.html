@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
   <title>AI Car Studio</title>
@@ -16,7 +17,9 @@
       --pill-bg: rgba(255, 255, 255, 0.05);
     }
 
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
 
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
@@ -30,12 +33,30 @@
         var(--bg);
     }
 
-    h1 { margin: 0 0 10px 0; font-size: 24px; letter-spacing: 0.03em; }
-    h2 { margin-top: 0; font-size: 18px; }
-    h3 { margin-top: 0; font-size: 16px; }
-    h4 { margin-top: 0; font-size: 14px; }
+    h1 {
+      margin: 0 0 10px 0;
+      font-size: 24px;
+      letter-spacing: 0.03em;
+    }
 
-    p { color: var(--text-soft); }
+    h2 {
+      margin-top: 0;
+      font-size: 18px;
+    }
+
+    h3 {
+      margin-top: 0;
+      font-size: 16px;
+    }
+
+    h4 {
+      margin-top: 0;
+      font-size: 14px;
+    }
+
+    p {
+      color: var(--text-soft);
+    }
 
     .app-header {
       display: flex;
@@ -104,7 +125,9 @@
       margin-bottom: 12px;
     }
 
-    .tab-content.active { display: block; }
+    .tab-content.active {
+      display: block;
+    }
 
     button {
       margin: 3px;
@@ -135,7 +158,9 @@
         0 12px 24px rgba(0, 0, 0, 0.7);
     }
 
-    button.primary:hover { filter: brightness(1.08); }
+    button.primary:hover {
+      filter: brightness(1.08);
+    }
 
     input[type="number"],
     input[type="text"],
@@ -150,11 +175,22 @@
       min-width: 60px;
     }
 
-    input[type="text"] { width: 160px; }
-    input[type="checkbox"] { margin-right: 4px; }
-    select { min-width: 120px; }
+    input[type="text"] {
+      width: 160px;
+    }
 
-    label { font-size: 13px; color: var(--text-soft); }
+    input[type="checkbox"] {
+      margin-right: 4px;
+    }
+
+    select {
+      min-width: 120px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--text-soft);
+    }
 
     #video {
       border-radius: 12px;
@@ -167,7 +203,8 @@
       cursor: crosshair;
     }
 
-    pre, textarea {
+    pre,
+    textarea {
       width: 100%;
       box-sizing: border-box;
       background: #050510;
@@ -235,8 +272,13 @@
       background: #9ca3ff;
     }
 
-    .pill-ok .pill-dot { background: #4ade80; }
-    .pill-bad .pill-dot { background: #f97373; }
+    .pill-ok .pill-dot {
+      background: #4ade80;
+    }
+
+    .pill-bad .pill-dot {
+      background: #f97373;
+    }
 
     .split {
       display: flex;
@@ -244,7 +286,8 @@
       gap: 14px;
     }
 
-    .left-col, .right-col {
+    .left-col,
+    .right-col {
       flex: 1 1 0;
       min-width: 0;
     }
@@ -256,7 +299,9 @@
     }
 
     /* Joystick */
-    #joystick-wrapper { margin-top: 4px; }
+    #joystick-wrapper {
+      margin-top: 4px;
+    }
 
     #joystick-base {
       width: 180px;
@@ -322,10 +367,13 @@
     }
 
     @media (max-width: 900px) {
-      .split { flex-direction: column; }
+      .split {
+        flex-direction: column;
+      }
     }
   </style>
 </head>
+
 <body>
   <div class="app-header">
     <div>
@@ -495,10 +543,12 @@
             </div>
             <div class="row">
               <label>Left trim:
-                <input id="ctrl-left-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00" style="width:70px;">
+                <input id="ctrl-left-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00"
+                  style="width:70px;">
               </label>
               <label>Right trim:
-                <input id="ctrl-right-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00" style="width:70px;">
+                <input id="ctrl-right-trim" type="number" min="0.5" max="1.5" step="0.02" value="1.00"
+                  style="width:70px;">
               </label>
             </div>
             <div class="row">
@@ -752,7 +802,7 @@
             '<span class="pill-dot ' + (on ? 'pill-ok' : 'pill-bad') +
             '"></span> Camera: ' + (on ? 'ON' : 'OFF') + ' (' + backend + ')';
         }
-      } catch (e) {}
+      } catch (e) { }
     }
     setInterval(pollHealth, 1000);
 
@@ -789,7 +839,7 @@
         document.getElementById("cam-config-status").innerHTML =
           '<span class="pill-dot"></span> fps: ' + (cfg.fps ?? "--") +
           ', ' + (cfg.width ?? "?") + 'x' + (cfg.height ?? "?");
-      } catch (e) {}
+      } catch (e) { }
     }
 
     async function applyCameraConfig() {
@@ -1018,7 +1068,7 @@
           ' • L ' + (p.left_trim ?? 1).toFixed(2) +
           ' • R ' + (p.right_trim ?? 1).toFixed(2) +
           ' • expo ' + (p.throttle_expo ?? 1).toFixed(2);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     async function applyControlParams() {
@@ -1147,12 +1197,12 @@
         const baseTurn = 0.4 + 0.6 * Math.min(1, Math.abs(steer));
         if (steer > 0) {
           // turn right: left wheel moves
-          left = baseTurn;
-          right = 0.0;
-        } else {
-          // turn left: right wheel moves
           left = 0.0;
           right = baseTurn;
+        } else {
+          // turn left: right wheel moves
+          left = baseTurn;
+          right = 0.0;
         }
       } else {
         // differential mixing, forward-only
@@ -1305,4 +1355,5 @@
     bootstrap();
   </script>
 </body>
+
 </html>
