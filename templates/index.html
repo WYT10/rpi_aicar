@@ -1643,7 +1643,7 @@
         if (deployPill) deployPill.innerHTML = html;
       }
 
-      setPill('<span class="pill-dot"></span> testing...');
+      setPill('<span class="pill-dot"></span> testing.');
 
       try {
         // Build URL with ?model=... if a model is selected in Deploy tab
@@ -1665,7 +1665,7 @@
         out.textContent = JSON.stringify(d, null, 2);
         setPill('<span class="pill-dot pill-ok"></span> tested');
 
-        // Overlay predicted point if we got X/Y in 0..149 grid
+        // Overlay predicted point...
         if (typeof d.click_X === "number" &&
           typeof d.click_Y === "number" &&
           typeof d.image_width === "number" &&
@@ -1674,7 +1674,6 @@
           const img = document.getElementById("video");
           const marker = document.getElementById("click-marker");
           if (img && marker && img.getBoundingClientRect().width > 0) {
-            // convert grid 0..149 back to [0,1]
             const sx = d.click_X / 149.0;
             const sy = d.click_Y / 149.0;
             const px = sx * 100;
@@ -1689,6 +1688,7 @@
         setPill('<span class="pill-dot pill-bad"></span> test error');
       }
     }
+
 
     async function refreshModels() {
       try {
@@ -1809,17 +1809,16 @@
 
     // [J] Bootstrap
     async function bootstrap() {
-      switchTab("tab-file");
       fsSetPath(".");
-
+      fsList();
+      pollHealth();
+      loadCameraConfig();
       refreshDatasets();
       refreshTrainDatasets();
       loadControlParams();
-      pollHealth();
-      loadCameraConfig();
       setupJoystick();
       pollDeployStatus();
-      refreshModels();
+      refreshModels();  // <-- important
     }
 
     bootstrap();

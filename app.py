@@ -1581,22 +1581,13 @@ def api_train_status():
 
 @app.route("/api/models")
 def api_models():
-    """
-    List available model files in MODELS_ROOT.
-
-    For now we just inspect *.pt and guess a 'kind' tag from the filename
-    (e.g. contains 'int8' -> int8). You can drop extra variants here later.
-    """
     items = []
     if os.path.isdir(MODELS_ROOT):
         for name in sorted(os.listdir(MODELS_ROOT)):
             if not name.lower().endswith(".pt"):
                 continue
             full = os.path.join(MODELS_ROOT, name)
-            try:
-                st = os.stat(full)
-            except OSError:
-                continue
+            st = os.stat(full)
             kind = "fp32"
             lname = name.lower()
             if "int8" in lname:
