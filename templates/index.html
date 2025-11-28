@@ -253,6 +253,66 @@
       color: var(--text-main);
     }
 
+    .fs-entry.selected {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      color: var(--text-main);
+    }
+
+    .fs-breadcrumb {
+      font-size: 12px;
+      color: var(--text-soft);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+
+    .fs-crumb {
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .fs-crumb:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+    }
+
+    .fs-crumb-sep {
+      opacity: 0.4;
+      margin: 0 4px;
+    }
+
+    #fs-preview-container {
+      margin-top: 8px;
+      border-radius: 10px;
+      padding: 8px;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      display: none;
+    }
+
+    #fs-preview-inner {
+      max-height: 260px;
+      overflow: auto;
+    }
+
+    #fs-preview-img {
+      max-width: 100%;
+      max-height: 240px;
+      display: block;
+      border-radius: 8px;
+    }
+
+    #fs-preview-info {
+      font-size: 11px;
+      color: var(--text-soft);
+      margin-top: 4px;
+    }
+
     .pill {
       display: inline-flex;
       align-items: center;
@@ -396,6 +456,7 @@
   </div>
 
   <!-- FILE TAB -->
+  <!-- FILE TAB -->
   <div id="tab-file" class="tab-content active">
     <div class="split">
       <div class="left-col">
@@ -404,7 +465,10 @@
           <label>Path:
             <input id="fs-path" type="text" value=".">
           </label>
-          <button onclick="fsList()">List</button>
+          <button onclick="fsSetPath(document.getElementById('fs-path').value)">Go</button>
+        </div>
+        <div class="row">
+          <div id="fs-breadcrumb" class="fs-breadcrumb"></div>
         </div>
         <div class="row">
           <button onclick="fsNewFile()">New File</button>
@@ -427,9 +491,22 @@
           <button class="primary" onclick="fsSave()">Save</button>
         </div>
         <textarea id="fs-editor" placeholder="Open a file from the list to edit it here"></textarea>
+
+        <div id="fs-preview-container">
+          <div class="row" style="margin-top:6px;margin-bottom:4px;">
+            <span class="pill">
+              <span class="pill-dot"></span> Image preview
+            </span>
+          </div>
+          <div id="fs-preview-inner">
+            <img id="fs-preview-img" alt="Preview">
+            <div id="fs-preview-info"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
+
 
   <!-- IMAGE TAB -->
   <div id="tab-image" class="tab-content">
@@ -653,19 +730,36 @@
 
   <!-- DEPLOY TAB -->
   <div id="tab-deploy" class="tab-content">
-    <h2>Deploy (Stub Autopilot)</h2>
+    <h2>Deploy / Autopilot</h2>
     <p style="font-size:13px;">
       This tab is about <b>online behaviour</b>:
-      start/stop the autopilot loop, tune gains, and quickly probe how the
-      (future) model reacts to the current camera frame.
+      choose a model, test it on the live camera frame, then start the
+      autopilot loop and tune gains.
     </p>
 
+    <!-- Model selection row -->
+    <div class="row">
+      <label>Model:
+        <select id="deploy-model"></select>
+      </label>
+      <button onclick="refreshModels()">Refresh models</button>
+      <span id="model-status" class="pill">
+        <span class="pill-dot"></span> no model loaded
+      </span>
+    </div>
+
+    <!-- Control row (autopilot + live test) -->
     <div class="row">
       <button class="primary" onclick="startAutopilot()">Start Autopilot</button>
       <button onclick="stopAutopilot()">Stop</button>
       <button onclick="pollDeployStatus()">Refresh Status</button>
+      <button onclick="testModelOnCurrentFrame()">Test on current frame</button>
+      <span id="deploy-test-status" class="pill">
+        <span class="pill-dot"></span> idle
+      </span>
     </div>
 
+    <!-- Gains row -->
     <div class="row">
       <label>Throttle gain:
         <input id="deploy-throttle" type="number" step="0.1" value="1.0">
@@ -680,13 +774,6 @@
         <input id="deploy-drive" type="checkbox"> Drive motors
       </label>
       <button onclick="updateDeployGains()">Apply</button>
-    </div>
-
-    <div class="row" style="margin-top:8px;">
-      <button onclick="testModelOnCurrentFrame()">Test model on current frame</button>
-      <span id="deploy-test-status" class="pill">
-        <span class="pill-dot"></span> idle
-      </span>
     </div>
 
     <pre id="deploy-status" style="margin-top:8px;"></pre>
@@ -721,10 +808,91 @@
     });
 
     // [B] File manager
+    // [B] File manager
+    let fsCurrentPath = ".";
+    let fsSelection = new Set();
     let fsSelectedPath = null;
+    let fsLastIndex = -1;
+
+    function fsIsImage(path) {
+      return /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(path || "");
+    }
+
+    function fsUpdateSelectedPill() {
+      const pill = document.getElementById("fs-selected");
+      if (!pill) return;
+      const count = fsSelection.size;
+      if (count === 0) {
+        pill.innerHTML = '<span class="pill-dot"></span> selected: none';
+      } else if (count === 1) {
+        const only = Array.from(fsSelection)[0];
+        pill.innerHTML =
+          '<span class="pill-dot pill-ok"></span> selected: ' + only;
+      } else {
+        pill.innerHTML =
+          '<span class="pill-dot pill-ok"></span> selected: ' +
+          count + ' items';
+      }
+    }
+
+    function fsRenderBreadcrumb(path) {
+      const bc = document.getElementById("fs-breadcrumb");
+      if (!bc) return;
+      bc.innerHTML = "";
+
+      const norm = (path && path !== ".") ? path : ".";
+      const parts = norm.split("/").filter(p => p && p !== ".");
+
+      // Root crumb
+      const rootSpan = document.createElement("span");
+      rootSpan.className = "fs-crumb";
+      rootSpan.textContent = ".";
+      rootSpan.onclick = () => fsSetPath(".");
+      bc.appendChild(rootSpan);
+
+      let accum = "";
+      parts.forEach((p, idx) => {
+        const sep = document.createElement("span");
+        sep.className = "fs-crumb-sep";
+        sep.textContent = "/";
+        bc.appendChild(sep);
+
+        accum = accum ? (accum + "/" + p) : p;
+        const crumb = document.createElement("span");
+        crumb.className = "fs-crumb";
+        crumb.textContent = p;
+        crumb.onclick = () => fsSetPath(accum);
+        bc.appendChild(crumb);
+      });
+    }
+
+    function fsRefreshSelectionClasses() {
+      const list = document.getElementById("fs-list");
+      if (!list) return;
+      Array.from(list.children).forEach(div => {
+        const p = div.dataset.path;
+        if (p && fsSelection.has(p)) {
+          div.classList.add("selected");
+        } else {
+          div.classList.remove("selected");
+        }
+      });
+    }
+
+    function fsSetPath(path) {
+      fsCurrentPath = path && path !== "" ? path : ".";
+      const input = document.getElementById("fs-path");
+      if (input) input.value = fsCurrentPath;
+      fsSelection.clear();
+      fsSelectedPath = null;
+      fsLastIndex = -1;
+      fsUpdateSelectedPill();
+      fsRenderBreadcrumb(fsCurrentPath);
+      fsList();
+    }
 
     async function fsList() {
-      const path = document.getElementById("fs-path").value;
+      const path = fsCurrentPath;
       const res = await fetch("/api/fs/list?path=" + encodeURIComponent(path));
       const data = await res.json();
       const list = document.getElementById("fs-list");
@@ -734,28 +902,71 @@
         return;
       }
       const entries = data.data.entries || [];
-      entries.forEach(e => {
+      entries.forEach((e, idx) => {
+        let base = path;
+        if (base === ".") base = "";
+        const rel = (base ? base + "/" : "") + e.name;
+
         const div = document.createElement("div");
         div.className = "fs-entry";
-        div.onclick = () => fsSelect(path, e);
+        div.dataset.path = rel;
+        div.dataset.index = String(idx);
+
         const left = document.createElement("span");
         left.textContent = (e.is_dir ? "📁 " : "📄 ") + e.name;
         const right = document.createElement("span");
         right.textContent = e.size != null ? e.size + " B" : "";
         div.appendChild(left);
         div.appendChild(right);
+
+        div.onclick = (evt) => fsHandleEntryClick(evt, path, e, idx, rel);
         list.appendChild(div);
       });
+
+      fsRefreshSelectionClasses();
+      fsRenderBreadcrumb(path);
     }
 
-    function fsSelect(curPath, entry) {
-      let full = curPath;
-      if (full === ".") full = "";
-      const rel = (full ? full + "/" : "") + entry.name;
+    function fsHandleEntryClick(evt, curPath, entry, index, rel) {
+      // Single-click folder with no modifiers -> enter folder
+      if (entry.is_dir && !evt.ctrlKey && !evt.metaKey && !evt.shiftKey) {
+        fsSetPath(rel);
+        return;
+      }
+
+      // Selection logic (like VS Code-ish)
+      const list = document.getElementById("fs-list");
+      const children = Array.from(list.children);
+
+      if (evt.shiftKey && fsLastIndex >= 0 && fsLastIndex < children.length) {
+        // Range select
+        fsSelection.clear();
+        const start = Math.min(fsLastIndex, index);
+        const end = Math.max(fsLastIndex, index);
+        for (let i = start; i <= end; i++) {
+          const p = children[i].dataset.path;
+          if (p) fsSelection.add(p);
+        }
+      } else if (evt.ctrlKey || evt.metaKey) {
+        // Toggle add/remove
+        if (fsSelection.has(rel)) fsSelection.delete(rel);
+        else fsSelection.add(rel);
+        fsLastIndex = index;
+      } else {
+        // Single selection
+        fsSelection.clear();
+        fsSelection.add(rel);
+        fsLastIndex = index;
+      }
+
       fsSelectedPath = rel;
-      document.getElementById("fs-selected").innerHTML =
-        '<span class="pill-dot pill-ok"></span> selected: ' + rel;
-      if (!entry.is_dir) fsOpen(rel);
+      fsUpdateSelectedPill();
+      fsRefreshSelectionClasses();
+
+      // If it's a file and we didn't use modifiers: open it
+      if (!entry.is_dir && !(evt.ctrlKey || evt.metaKey || evt.shiftKey)) {
+        fsOpen(rel);
+      }
     }
 
     async function fsOpen(path) {
@@ -767,14 +978,34 @@
       }
       document.getElementById("fs-edit-path").innerHTML =
         '<span class="pill-dot pill-ok"></span> ' + data.data.path;
-      document.getElementById("fs-editor").value = data.data.content;
+      document.getElementById("fs-editor").value = data.data.content || "";
+
+      fsUpdatePreview(path);
+    }
+
+    function fsUpdatePreview(path) {
+      const container = document.getElementById("fs-preview-container");
+      const img = document.getElementById("fs-preview-img");
+      const info = document.getElementById("fs-preview-info");
+      if (!container || !img || !info) return;
+
+      if (!fsIsImage(path)) {
+        container.style.display = "none";
+        img.src = "";
+        info.textContent = "";
+        return;
+      }
+      const url = "/api/fs/raw?path=" + encodeURIComponent(path) + "&ts=" + Date.now();
+      img.src = url;
+      container.style.display = "block";
+      info.textContent = path;
     }
 
     async function fsSave() {
       const pill = document.getElementById("fs-edit-path");
       const text = pill.textContent || "";
       const parts = text.split(/\s+/);
-      const path = parts.slice(1).join(" ").trim();
+      const path = parts.slice(1).join(" ").trim(); // after dot
       if (!path || path === "no file") {
         alert("No file selected");
         return;
@@ -786,8 +1017,11 @@
         body: JSON.stringify({ path, content })
       });
       const data = await res.json();
-      if (!data.ok) alert("Save error: " + data.error);
-      else alert("Saved: " + path);
+      if (!data.ok) {
+        alert("Save error: " + data.error);
+      } else {
+        alert("Saved: " + path);
+      }
     }
 
     async function fsNewFile() {
@@ -817,21 +1051,29 @@
     }
 
     async function fsDelete() {
-      if (!fsSelectedPath) {
+      if (!fsSelection.size) {
         alert("No file/folder selected");
         return;
       }
-      if (!confirm("Delete " + fsSelectedPath + " (non-recursive)?")) return;
-      const res = await fetch("/api/fs/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: fsSelectedPath })
-      });
-      const data = await res.json();
-      if (!data.ok) alert("Error: " + data.error);
+      const items = Array.from(fsSelection);
+      if (!confirm("Delete " + items.join(", ") + " (non-recursive)?")) return;
+
+      for (const p of items) {
+        const res = await fetch("/api/fs/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: p })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          alert("Error deleting " + p + ": " + data.error);
+          break;
+        }
+      }
+
+      fsSelection.clear();
       fsSelectedPath = null;
-      document.getElementById("fs-selected").innerHTML =
-        '<span class="pill-dot"></span> selected: none';
+      fsUpdateSelectedPill();
       fsList();
     }
 
@@ -1404,7 +1646,14 @@
       setPill('<span class="pill-dot"></span> testing...');
 
       try {
-        const res = await fetch("/api/deploy/test_frame");
+        // Build URL with ?model=... if a model is selected in Deploy tab
+        let url = "/api/deploy/test_frame";
+        const modelSel = document.getElementById("deploy-model");
+        if (modelSel && modelSel.value) {
+          url += "?model=" + encodeURIComponent(modelSel.value);
+        }
+
+        const res = await fetch(url);
         const data = await res.json();
         if (!data.ok) {
           out.textContent = "Error: " + data.error;
@@ -1416,16 +1665,16 @@
         out.textContent = JSON.stringify(d, null, 2);
         setPill('<span class="pill-dot pill-ok"></span> tested');
 
-        // Optionally overlay predicted click on the video feed if we got X/Y
+        // Overlay predicted point if we got X/Y in 0..149 grid
         if (typeof d.click_X === "number" &&
           typeof d.click_Y === "number" &&
           typeof d.image_width === "number" &&
           typeof d.image_height === "number") {
+
           const img = document.getElementById("video");
           const marker = document.getElementById("click-marker");
           if (img && marker && img.getBoundingClientRect().width > 0) {
-            const rect = img.getBoundingClientRect();
-            // convert grid 0..149 back to relative [0,1]
+            // convert grid 0..149 back to [0,1]
             const sx = d.click_X / 149.0;
             const sy = d.click_Y / 149.0;
             const px = sx * 100;
@@ -1441,6 +1690,39 @@
       }
     }
 
+    async function refreshModels() {
+      try {
+        const res = await fetch("/api/models");
+        const data = await res.json();
+        if (!data.ok) {
+          alert("Model list error: " + data.error);
+          return;
+        }
+        const sel = document.getElementById("deploy-model");
+        if (!sel) return;
+        sel.innerHTML = "";
+        const items = data.data.items || [];
+        for (const m of items) {
+          const opt = document.createElement("option");
+          opt.value = m.name;
+          opt.textContent = m.name + " (" + m.kind + ", " + m.size_kb + " KB)";
+          sel.appendChild(opt);
+        }
+        // status pill
+        const pill = document.getElementById("model-status");
+        if (pill) {
+          if (items.length) {
+            pill.innerHTML =
+              '<span class="pill-dot pill-ok"></span> ' + items.length + ' model(s) found';
+          } else {
+            pill.innerHTML =
+              '<span class="pill-dot"></span> no models yet';
+          }
+        }
+      } catch (e) {
+        alert("Model list exception: " + e);
+      }
+    }
 
 
     // [I] Deploy
@@ -1448,17 +1730,47 @@
       const res = await fetch("/api/deploy/status");
       const data = await res.json();
       if (!data.ok) return;
+
+      const s = data.data;
       document.getElementById("deploy-status").textContent =
-        JSON.stringify(data.data, null, 2);
-      const g = data.data.gains || {};
+        JSON.stringify(s, null, 2);
+
+      // reflect active model
+      const modelSel = document.getElementById("deploy-model");
+      const modelStatus = document.getElementById("model-status");
+      if (modelStatus) {
+        const m = s.model || "(none)";
+        modelStatus.innerHTML =
+          '<span class="pill-dot pill-ok"></span> current model: ' + m;
+      }
+      if (modelSel && s.model) {
+        for (const opt of modelSel.options) {
+          if (opt.value === s.model) {
+            opt.selected = true;
+            break;
+          }
+        }
+      }
+
+      const g = s.gains || {};
       document.getElementById("deploy-throttle").value = g.throttle_gain ?? 1.0;
       document.getElementById("deploy-steering").value = g.steering_gain ?? 1.0;
       document.getElementById("deploy-expo").value = g.expo ?? 1.0;
-      document.getElementById("deploy-drive").checked = !!data.data.drive_motors;
+      document.getElementById("deploy-drive").checked = !!s.drive_motors;
     }
 
     async function startAutopilot() {
-      const res = await fetch("/api/deploy/start", { method: "POST" });
+      const modelSel = document.getElementById("deploy-model");
+      const body = {};
+      if (modelSel && modelSel.value) {
+        body.model = modelSel.value;
+      }
+
+      const res = await fetch("/api/deploy/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
       const data = await res.json();
       if (!data.ok) {
         alert("Autopilot error: " + data.error);
@@ -1497,14 +1809,17 @@
 
     // [J] Bootstrap
     async function bootstrap() {
-      fsList();
+      switchTab("tab-file");
+      fsSetPath(".");
+
       refreshDatasets();
       refreshTrainDatasets();
-      setupJoystick();
       loadControlParams();
-      loadCameraConfig();
       pollHealth();
+      loadCameraConfig();
+      setupJoystick();
       pollDeployStatus();
+      refreshModels();
     }
 
     bootstrap();

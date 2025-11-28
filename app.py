@@ -32,8 +32,9 @@ from collections import deque
 
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request, Response, render_template
+from flask import Flask, jsonify, request, Response, render_template, send_file
 from flask_cors import CORS
+import re
 
 try:
     import torch
@@ -982,6 +983,21 @@ def api_fs_delete():
         return err(f"delete failed: {e}", 400)
     return ok({"deleted": path})
 
+@app.route("/api/fs/raw")
+def api_fs_raw():
+    """
+    Return a raw file (useful for image preview in the File tab).
+    """
+    rel = request.args.get("path", "")
+    try:
+        full = _safe_path(rel)
+    except ValueError:
+        return err("invalid path", 400)
+    if not os.path.isfile(full):
+        return err("not a file", 404)
+    # Let Flask guess mimetype (jpg/png/etc.)
+    return send_file(full)
+
 
 # ============================================================
 # [7] Camera routes
@@ -1563,6 +1579,49 @@ def api_train_status():
     return ok(train_status)
 
 
+@app.route("/api/models")
+def api_models():
+    """
+    List available model files in MODELS_ROOT.
+
+    For now we just inspect *.pt and guess a 'kind' tag from the filename
+    (e.g. contains 'int8' -> int8). You can drop extra variants here later.
+    """
+    items = []
+    if os.path.isdir(MODELS_ROOT):
+        for name in sorted(os.listdir(MODELS_ROOT)):
+            if not name.lower().endswith(".pt"):
+                continue
+            full = os.path.join(MODELS_ROOT, name)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            kind = "fp32"
+            lname = name.lower()
+            if "int8" in lname:
+                kind = "int8"
+            elif "quant" in lname or "qnn" in lname:
+                kind = "quantized"
+
+            items.append(
+                {
+                    "name": name,
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                    "kind": kind,
+                }
+            )
+
+    return ok(
+        {
+            "models": items,
+            "default": autopilot_cfg.get("default_model", "aicar_latest.pt"),
+            "current": deploy_status.get("model"),
+        }
+    )
+
+
 def load_policy_model(model_name: str = None):
     """
     Load trained model into globals for autopilot.
@@ -1772,20 +1831,14 @@ def api_deploy_gains():
     deploy_status["drive_motors"] = drive_motors
     return ok(deploy_status)
 
-
 @app.route("/api/deploy/test_frame")
 def api_deploy_test_frame():
     """
-    Real-time test stub.
+    Real-time model test.
 
     - Requires camera to be ON.
-    - Grabs one processed frame (or raw).
-    - Returns:
-        * image size
-        * a fake "prediction" (center of grid)
-        * placeholder left/right command
-    Later:
-        * replace the prediction logic with a real model.
+    - Optional query: ?model=NAME to test a specific .pt file.
+    - Uses TinySteerNet via run_policy_on_frame() to predict (left,right).
     """
     if not camera_on:
         return err("camera is OFF", 409)
@@ -1794,25 +1847,42 @@ def api_deploy_test_frame():
     if frame is None:
         return err("no frame available", 409)
 
+    # Decide which model to use
+    model_name = (
+        request.args.get("model")
+        or deploy_status.get("model")
+        or autopilot_cfg.get("default_model", "aicar_latest.pt")
+    )
+
+    # Load / reload model if needed
+    if autopilot_model is None or model_name != deploy_status.get("model"):
+        ok_model, msg = load_policy_model(model_name)
+        if not ok_model:
+            return err(f"model load failed: {msg}", 500)
+        deploy_status["model"] = model_name
+
+    # Run policy
+    left, right = run_policy_on_frame(frame)
     h, w = frame.shape[:2]
 
-    # for now: pretend the model predicts the center of the image/grid
-    X = 75  # 0..149 grid centre
+    # For now we still use a stub click in the middle of the 150x150 grid.
+    # Later you can map (left,right) -> (X,Y) if you want a "look-ahead" point.
+    X = 75
     Y = 75
 
-    # and some placeholder motor command (stopped)
-    left = 0.0
-    right = 0.0
+    return ok(
+        {
+            "model": deploy_status.get("model"),
+            "image_width": int(w),
+            "image_height": int(h),
+            "click_X": int(X),
+            "click_Y": int(Y),
+            "left": float(left),
+            "right": float(right),
+            "note": "TinySteerNet inference; X/Y are still stubbed.",
+        }
+    )
 
-    return ok({
-        "image_width": int(w),
-        "image_height": int(h),
-        "click_X": int(X),
-        "click_Y": int(Y),
-        "left": float(left),
-        "right": float(right),
-        "note": "stub prediction – wire your real model here",
-    })
 
 
 # ============================================================
