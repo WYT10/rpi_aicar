@@ -593,8 +593,13 @@
   <div id="tab-train" class="tab-content">
     <h2>Train</h2>
     <p style="font-size:13px;">
-      Stub trainer that simulates training. Later you can plug in your CNN.
+      End-to-end loop for your click-labelled dataset.<br>
+      1) Collect images on the <b>Image</b> tab (filenames encode X/Y).<br>
+      2) Choose a dataset & hyperparams here and start training.<br>
+      3) Run <b>Validate</b> to see basic metrics, and <b>Test current frame</b> to check behaviour in real time.
     </p>
+
+    <!-- Dataset + hyperparams -->
     <div class="row">
       <label>Dataset:
         <select id="train-dataset"></select>
@@ -613,18 +618,54 @@
       </label>
       <button class="primary" onclick="startTrain()">Start Training</button>
     </div>
-    <pre id="train-status"></pre>
-    <pre id="train-dataset-summary" style="margin-top:6px;font-size:11px;max-height:120px;overflow:auto;"></pre>
+
+    <!-- Training status -->
+    <h4 style="margin-top:12px;">Training status</h4>
+    <pre id="train-status" style="font-size:11px;max-height:140px;overflow:auto;"></pre>
+
+    <!-- Dataset summary -->
+    <h4 style="margin-top:12px;">Dataset summary</h4>
+    <pre id="train-dataset-summary" style="font-size:11px;max-height:120px;overflow:auto;"></pre>
+
+    <!-- Validation + real-time test -->
+    <hr class="soft">
+
+    <h4>Validate & real-time test</h4>
+    <div class="row">
+      <button onclick="validateDataset()">Validate on dataset</button>
+      <button onclick="testModelOnCurrentFrame()">Test model on current frame</button>
+      <span id="train-test-status" class="pill">
+        <span class="pill-dot"></span> idle
+      </span>
+    </div>
+    <div class="row" style="margin-top:6px;">
+      <div style="flex:1; margin-right:8px;">
+        <div style="font-size:11px;color:var(--text-soft);margin-bottom:4px;">Validation result</div>
+        <pre id="train-validation" style="font-size:11px;max-height:120px;overflow:auto;"></pre>
+      </div>
+      <div style="flex:1; margin-left:8px;">
+        <div style="font-size:11px;color:var(--text-soft);margin-bottom:4px;">Current-frame test</div>
+        <pre id="train-test-output" style="font-size:11px;max-height:120px;overflow:auto;"></pre>
+      </div>
+    </div>
   </div>
+
 
   <!-- DEPLOY TAB -->
   <div id="tab-deploy" class="tab-content">
     <h2>Deploy (Stub Autopilot)</h2>
+    <p style="font-size:13px;">
+      This tab is about <b>online behaviour</b>:
+      start/stop the autopilot loop, tune gains, and quickly probe how the
+      (future) model reacts to the current camera frame.
+    </p>
+
     <div class="row">
       <button class="primary" onclick="startAutopilot()">Start Autopilot</button>
       <button onclick="stopAutopilot()">Stop</button>
       <button onclick="pollDeployStatus()">Refresh Status</button>
     </div>
+
     <div class="row">
       <label>Throttle gain:
         <input id="deploy-throttle" type="number" step="0.1" value="1.0">
@@ -640,8 +681,17 @@
       </label>
       <button onclick="updateDeployGains()">Apply</button>
     </div>
-    <pre id="deploy-status"></pre>
+
+    <div class="row" style="margin-top:8px;">
+      <button onclick="testModelOnCurrentFrame()">Test model on current frame</button>
+      <span id="deploy-test-status" class="pill">
+        <span class="pill-dot"></span> idle
+      </span>
+    </div>
+
+    <pre id="deploy-status" style="margin-top:8px;"></pre>
   </div>
+
 
   <script>
     // =====================================================
@@ -1304,6 +1354,94 @@
         setTimeout(pollTrainStatus, 500);
       }
     }
+
+
+    async function validateDataset() {
+      const sel = document.getElementById("train-dataset");
+      const dataset = sel && sel.value ? sel.value : "";
+      const statusPill = document.getElementById("train-test-status");
+      const out = document.getElementById("train-validation");
+      if (statusPill) {
+        statusPill.innerHTML = '<span class="pill-dot"></span> validating...';
+      }
+      try {
+        const url = "/api/train/validate" +
+          (dataset ? ("?dataset=" + encodeURIComponent(dataset)) : "");
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.ok) {
+          out.textContent = "Error: " + data.error;
+          if (statusPill) {
+            statusPill.innerHTML =
+              '<span class="pill-dot pill-bad"></span> validate error';
+          }
+          return;
+        }
+        out.textContent = JSON.stringify(data.data, null, 2);
+        if (statusPill) {
+          statusPill.innerHTML =
+            '<span class="pill-dot pill-ok"></span> validated';
+        }
+      } catch (e) {
+        out.textContent = "Exception: " + e;
+        if (statusPill) {
+          statusPill.innerHTML =
+            '<span class="pill-dot pill-bad"></span> validate error';
+        }
+      }
+    }
+
+    async function testModelOnCurrentFrame() {
+      const trainPill = document.getElementById("train-test-status");
+      const deployPill = document.getElementById("deploy-test-status");
+      const out = document.getElementById("train-test-output");
+
+      function setPill(html) {
+        if (trainPill) trainPill.innerHTML = html;
+        if (deployPill) deployPill.innerHTML = html;
+      }
+
+      setPill('<span class="pill-dot"></span> testing...');
+
+      try {
+        const res = await fetch("/api/deploy/test_frame");
+        const data = await res.json();
+        if (!data.ok) {
+          out.textContent = "Error: " + data.error;
+          setPill('<span class="pill-dot pill-bad"></span> test error');
+          return;
+        }
+
+        const d = data.data || {};
+        out.textContent = JSON.stringify(d, null, 2);
+        setPill('<span class="pill-dot pill-ok"></span> tested');
+
+        // Optionally overlay predicted click on the video feed if we got X/Y
+        if (typeof d.click_X === "number" &&
+          typeof d.click_Y === "number" &&
+          typeof d.image_width === "number" &&
+          typeof d.image_height === "number") {
+          const img = document.getElementById("video");
+          const marker = document.getElementById("click-marker");
+          if (img && marker && img.getBoundingClientRect().width > 0) {
+            const rect = img.getBoundingClientRect();
+            // convert grid 0..149 back to relative [0,1]
+            const sx = d.click_X / 149.0;
+            const sy = d.click_Y / 149.0;
+            const px = sx * 100;
+            const py = sy * 100;
+            marker.style.left = px + "%";
+            marker.style.top = py + "%";
+            marker.style.display = "block";
+          }
+        }
+      } catch (e) {
+        out.textContent = "Exception: " + e;
+        setPill('<span class="pill-dot pill-bad"></span> test error');
+      }
+    }
+
+
 
     // [I] Deploy
     async function pollDeployStatus() {

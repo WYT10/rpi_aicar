@@ -34,5 +34,16 @@
     "max_rot": 0.8,
     "speed_gain": 1.0,
     "steer_gain": 1.0
+  },
+  "train": {
+    "image_width": 96,
+    "image_height": 64,
+    "default_epochs": 10,
+    "default_batch_size": 32,
+    "default_learning_rate": 0.001
+  },
+  "autopilot": {
+    "default_model": "aicar_latest.pt",
+    "fps": 20
   }
 }

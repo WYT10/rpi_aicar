@@ -35,6 +35,20 @@ import numpy as np
 from flask import Flask, jsonify, request, Response, render_template
 from flask_cors import CORS
 
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import Dataset, DataLoader
+
+    TORCH_AVAILABLE = True
+except Exception:
+    TORCH_AVAILABLE = False
+    torch = None
+    nn = None
+    optim = None
+    Dataset = None
+    DataLoader = None
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
@@ -80,6 +94,8 @@ def load_config(path: str = CONFIG_PATH):
 
 
 CONFIG = load_config()
+train_cfg = CONFIG.get("train", {})
+autopilot_cfg = CONFIG.get("autopilot", {})
 
 DATA_ROOT = os.path.join(ROOT, "data")
 LOGS_ROOT = os.path.join(ROOT, CONFIG["paths"]["logs_root"])
@@ -88,6 +104,35 @@ MODELS_ROOT = os.path.join(ROOT, CONFIG["paths"]["models_root"])
 
 for d in (DATA_ROOT, LOGS_ROOT, DATASETS_ROOT, MODELS_ROOT):
     os.makedirs(d, exist_ok=True)
+
+if TORCH_AVAILABLE:
+    class TinySteerNet(nn.Module):
+        """
+        Small CNN that maps an image -> [left,right] in [0,1].
+        """
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Sequential(
+                nn.Conv2d(3, 16, 5, stride=2, padding=2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 32, 5, stride=2, padding=2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(32, 48, 3, stride=2, padding=1),
+                nn.ReLU(inplace=True),
+            )
+            self.fc = nn.Sequential(
+                nn.Linear(48 * 8 * 12, 64),  # based on 96x64 input
+                nn.ReLU(inplace=True),
+                nn.Linear(64, 2),
+                nn.Sigmoid(),  # outputs in [0,1]
+            )
+
+        def forward(self, x):
+            z = self.conv(x)
+            z = z.view(z.size(0), -1)
+            return self.fc(z)
+else:
+    TinySteerNet = None
 
 LOG_PATH = os.path.join(LOGS_ROOT, "app.log")
 logging.basicConfig(
@@ -775,21 +820,32 @@ camera_on = False
 current_dataset = "default"
 os.makedirs(os.path.join(DATASETS_ROOT, current_dataset), exist_ok=True)
 
-# train / deploy stubs
+# train / deploy state
 train_status = {
     "running": False,
     "epoch": 0,
     "epochs": 0,
     "loss": None,
-    "note": "stub trainer",
+    "note": "",
+    "dataset": None,
+    "model_path": None,
 }
+
 deploy_status = {
     "autopilot": False,
+    "model": None,
     "gains": {"throttle_gain": 1.0, "steering_gain": 1.0, "expo": 1.0},
     "drive_motors": False,
 }
-
 _autopilot_thread = None
+
+# autopilot model cache
+autopilot_model = None
+autopilot_device = "cpu"
+autopilot_image_size = (
+    int(train_cfg.get("image_width", 96)),
+    int(train_cfg.get("image_height", 64)),
+)
 
 # start motor control loop once
 _motor_thread = threading.Thread(target=motor_loop, args=(motors,), daemon=True)
@@ -1122,6 +1178,16 @@ def api_datasets_summary():
 
 @app.route("/api/data/label_click", methods=["POST"])
 def api_label_click():
+    """
+    Click-to-label.
+
+    We encode the label into the filename:
+
+      x{X:03d}_y{Y:03d}_{tag}_{ts}.jpg
+
+    where X,Y are on a 150x150 grid (0..149). Training can recover
+    normalized sx,sy and derive left/right later.
+    """
     body = request.get_json(silent=True) or {}
     try:
         x = float(body["x"])
@@ -1131,16 +1197,18 @@ def api_label_click():
     except Exception:
         return err("x,y,image_width,image_height required", 400)
 
-    tag = str(body.get("tag", "click"))
+    if not camera_on:
+        return err("camera off", 409)
 
     frame = camera.get_raw()
     if frame is None:
         return err("no camera frame", 409)
 
-    h, w = frame.shape[:2]
+    # normalize click to [0,1] in UI image space
     sx = max(0.0, min(1.0, x / max(1.0, iw)))
     sy = max(0.0, min(1.0, y / max(1.0, ih)))
 
+    # map to 0..149 grid
     X = int(round(sx * 149))
     Y = int(round(sy * 149))
     X = max(0, min(149, X))
@@ -1149,35 +1217,130 @@ def api_label_click():
     ds_dir = os.path.join(DATASETS_ROOT, current_dataset)
     os.makedirs(ds_dir, exist_ok=True)
     ts = int(time.time() * 1000)
+    tag = str(body.get("tag", "click"))
+
     fname = f"x{X:03d}_y{Y:03d}_{tag}_{ts}.jpg"
     path = os.path.join(ds_dir, fname)
     cv2.imwrite(path, frame)
+    logger.info("Saved click-labeled frame: %s", path)
 
-    return ok({"file": fname, "X": X, "Y": Y, "dataset": current_dataset})
+    return ok(
+        {
+            "file": os.path.relpath(path, ROOT),
+            "X": X,
+            "Y": Y,
+            "dataset": current_dataset,
+        }
+    )
 
 
 # ============================================================
-# [9] Logging stub
+# [9] Logging (teleop recording using filenames)
 # ============================================================
 
-log_session = {"active": False, "rate_hz": 0.0, "tag": ""}
+
+# Teleop logger state
+log_state = {
+    "thread": None,
+    "running": False,
+    "rate_hz": 5.0,
+    "tag": "auto",
+    "dataset": None,
+}
+
+
+def _teleop_log_loop():
+    """
+    Periodically capture frames + current motor outputs and save them as:
+
+      t_l{L:03d}_r{R:03d}_{tag}_{ts}.jpg
+
+    L,R are 0..255 (quantized left/right in [0,1]).
+    """
+    logger.info("teleop logger: starting")
+    rate = float(log_state["rate_hz"])
+    tag = log_state["tag"]
+    ds_name = log_state["dataset"] or current_dataset
+
+    ds_dir = os.path.join(DATASETS_ROOT, ds_name)
+    os.makedirs(ds_dir, exist_ok=True)
+
+    dt = 1.0 / max(0.1, rate)
+
+    while log_state["running"]:
+        # grab raw frame
+        frame = camera.get_raw()
+        if frame is None:
+            time.sleep(0.01)
+            continue
+
+        # read smoothed logical motor outputs from control loop
+        with control_lock:
+            left = max(0.0, min(1.0, float(control_state["left_actual"])))
+            right = max(0.0, min(1.0, float(control_state["right_actual"])))
+
+        # quantize to 0..255 for filename
+        L = int(round(left * 255.0))
+        R = int(round(right * 255.0))
+        L = max(0, min(255, L))
+        R = max(0, min(255, R))
+
+        ts = int(time.time() * 1000)
+        fname = f"t_l{L:03d}_r{R:03d}_{tag}_{ts}.jpg"
+        path = os.path.join(ds_dir, fname)
+        cv2.imwrite(path, frame)
+
+        time.sleep(dt)
+
+    logger.info("teleop logger: stopped")
 
 
 @app.route("/api/log/start", methods=["POST"])
 def api_log_start():
+    """
+    Start teleop logging.
+
+    Body:
+      {
+        "rate_hz": 5.0,          # optional
+        "tag": "auto",           # optional (goes into filename)
+        "dataset": "teleop01"    # optional (defaults to current_dataset)
+      }
+    """
     body = request.get_json(silent=True) or {}
-    rate = float(body.get("rate_hz", 5.0))
+    if log_state["running"]:
+        return err("logging already running", 409)
+
+    rate_hz = float(body.get("rate_hz", 5.0))
     tag = str(body.get("tag", "auto"))
-    log_session["active"] = True
-    log_session["rate_hz"] = rate
-    log_session["tag"] = tag
-    return ok(log_session.copy())
+    dataset = (body.get("dataset") or current_dataset).strip() or current_dataset
+
+    log_state["rate_hz"] = max(0.5, min(30.0, rate_hz))
+    log_state["tag"] = tag
+    log_state["dataset"] = dataset
+    log_state["running"] = True
+
+    t = threading.Thread(target=_teleop_log_loop, daemon=True)
+    log_state["thread"] = t
+    t.start()
+
+    logger.info(
+        "teleop logger: started (dataset=%s, rate=%.1f Hz, tag=%s)",
+        dataset,
+        log_state["rate_hz"],
+        tag,
+    )
+
+    return ok({"rate_hz": log_state["rate_hz"], "tag": tag, "dataset": dataset})
 
 
 @app.route("/api/log/stop", methods=["POST"])
 def api_log_stop():
-    log_session["active"] = False
-    return ok(log_session.copy())
+    if not log_state["running"]:
+        return ok({"running": False})
+    log_state["running"] = False
+    logger.info("teleop logger: stop requested")
+    return ok({"running": False})
 
 
 # ============================================================
@@ -1213,71 +1376,347 @@ def api_motors_stop():
 
 
 # ============================================================
-# [11] Train stub
+# [11+12] Train + Deploy (autopilot using Torch model)
 # ============================================================
 
-def _train_loop(dataset: str, epochs: int, lr: float, batch_size: int):
-    train_status["running"] = True
-    train_status["epoch"] = 0
-    train_status["epochs"] = epochs
-    train_status["note"] = f"stub training on {dataset}"
-    losses = []
+_CLICK_RE = re.compile(r"x(\d{3})_y(\d{3})_")
+_TELEOP_RE = re.compile(r"t_l(\d{3})_r(\d{3})_")
 
-    for e in range(1, epochs + 1):
-        if not train_status["running"]:
-            break
-        time.sleep(0.5)
-        loss = max(0.01, 1.0 / e)
-        losses.append(loss)
-        train_status["epoch"] = e
-        train_status["loss"] = loss
 
-    train_status["running"] = False
-    train_status["note"] = "finished stub training"
-    logger.info("Stub training finished: %s", losses)
+def _filename_to_lr(fname: str):
+    """
+    Parse left,right ∈ [0,1] from filename.
+
+    Supports:
+      xXXX_yYYY_...jpg  (click)
+      t_lLLL_rRRR_...jpg (teleop)
+    """
+    m = _CLICK_RE.search(fname)
+    if m:
+        X = int(m.group(1))
+        Y = int(m.group(2))
+        sx = X / 149.0
+        sy = Y / 149.0
+
+        # click → forward/steer
+        steer = (sx - 0.5) * 2.0        # [-1,1]
+        forward = max(0.0, min(1.0, 1.0 - sy))  # [0,1]
+
+        left = forward * (1.0 - steer)
+        right = forward * (1.0 + steer)
+        maxv = max(left, right, 1e-6)
+        if maxv > 1.0:
+            left /= maxv
+            right /= maxv
+        left = max(0.0, min(1.0, left))
+        right = max(0.0, min(1.0, right))
+        return left, right
+
+    m = _TELEOP_RE.search(fname)
+    if m:
+        L = int(m.group(1))
+        R = int(m.group(2))
+        left = max(0.0, min(1.0, L / 255.0))
+        right = max(0.0, min(1.0, R / 255.0))
+        return left, right
+
+    raise ValueError(f"Unrecognized label pattern: {fname}")
 
 
 @app.route("/api/train/start", methods=["POST"])
 def api_train_start():
+    global train_status
+
+    if not TORCH_AVAILABLE or TinySteerNet is None:
+        return err("PyTorch not available on server (training disabled)", 500)
+
     if train_status["running"]:
         return err("training already running", 409)
+
+    from PIL import Image
+
     body = request.get_json(silent=True) or {}
-    dataset = (body.get("dataset") or current_dataset).strip()
-    epochs = int(body.get("epochs", 10))
-    lr = float(body.get("lr", 0.001))
-    batch_size = int(body.get("batch_size", 32))
-    t = threading.Thread(
-        target=_train_loop,
-        args=(dataset, epochs, lr, batch_size),
-        daemon=True,
-    )
+    dataset = body.get("dataset", current_dataset)
+    epochs = int(body.get("epochs", train_cfg.get("default_epochs", 10)))
+    lr = float(body.get("learning_rate", train_cfg.get("default_learning_rate", 1e-3)))
+    batch_size = int(body.get("batch_size", train_cfg.get("default_batch_size", 32)))
+
+    w = int(body.get("image_width", train_cfg.get("image_width", 96)))
+    h = int(body.get("image_height", train_cfg.get("image_height", 64)))
+    image_size = (w, h)
+
+    class FilenameDataset(Dataset):
+        def __init__(self, ds_name: str, image_size=(96, 64)):
+            self.ds_name = ds_name
+            self.image_size = image_size
+            ds_dir = _ensure_dataset(ds_name)
+            files = sorted(
+                f for f in os.listdir(ds_dir) if f.lower().endswith(".jpg")
+            )
+            self.samples = []
+            for fname in files:
+                try:
+                    left, right = _filename_to_lr(fname)
+                except ValueError:
+                    continue
+                full = os.path.join(ds_dir, fname)
+                self.samples.append((full, left, right))
+            if not self.samples:
+                raise RuntimeError(f"No labeled samples in dataset {ds_name}")
+
+        def __len__(self):
+            return len(self.samples)
+
+        def __getitem__(self, idx):
+            path, left, right = self.samples[idx]
+            img = Image.open(path).convert("RGB")
+            img = img.resize(self.image_size, Image.BILINEAR)
+            x = np.asarray(img, dtype=np.float32) / 255.0
+            x = np.transpose(x, (2, 0, 1))
+            x = torch.from_numpy(x)
+            y = torch.tensor([left, right], dtype=torch.float32)
+            return x, y
+
+    def _run_train():
+        global train_status
+        train_status = {
+            "running": True,
+            "epoch": 0,
+            "epochs": epochs,
+            "loss": None,
+            "note": f"training on {dataset}",
+            "dataset": dataset,
+            "model_path": None,
+        }
+        try:
+            ds = FilenameDataset(dataset, image_size=image_size)
+            loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0)
+
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = TinySteerNet().to(device)
+            criterion = nn.MSELoss()
+            optimizer = optim.Adam(model.parameters(), lr=lr)
+
+            logger.info(
+                "Train: dataset=%s, samples=%d, epochs=%d, batch=%d, lr=%.4f, device=%s",
+                dataset,
+                len(ds),
+                epochs,
+                batch_size,
+                lr,
+                device,
+            )
+
+            for e in range(epochs):
+                model.train()
+                running_loss = 0.0
+                n = 0
+                for x, y in loader:
+                    x = x.to(device)
+                    y = y.to(device)
+                    optimizer.zero_grad()
+                    y_hat = model(x)
+                    loss = criterion(y_hat, y)
+                    loss.backward()
+                    optimizer.step()
+                    running_loss += float(loss.item()) * x.size(0)
+                    n += x.size(0)
+
+                avg = running_loss / max(1, n)
+                train_status["epoch"] = e + 1
+                train_status["loss"] = float(avg)
+                train_status["note"] = f"epoch {e+1}/{epochs}"
+                logger.info("[train] epoch %d/%d loss=%.6f", e + 1, epochs, avg)
+
+            ts = int(time.time())
+            model_fname = f"aicar_{dataset}_{ts}.pt"
+            model_path = os.path.join(MODELS_ROOT, model_fname)
+            latest_path = os.path.join(MODELS_ROOT, "aicar_latest.pt")
+            os.makedirs(MODELS_ROOT, exist_ok=True)
+            torch.save({"model_state": model.state_dict(), "image_size": image_size}, model_path)
+            torch.save({"model_state": model.state_dict(), "image_size": image_size}, latest_path)
+            train_status["model_path"] = os.path.relpath(model_path, ROOT)
+            train_status["note"] = "done"
+            logger.info("Train: saved model to %s (and aicar_latest.pt)", model_path)
+        except Exception as e:
+            logger.exception("Training failed")
+            train_status["note"] = f"error: {e}"
+        finally:
+            train_status["running"] = False
+
+    t = threading.Thread(target=_run_train, daemon=True)
     t.start()
     return ok(
         {
+            "status": "started",
             "dataset": dataset,
             "epochs": epochs,
-            "lr": lr,
+            "learning_rate": lr,
             "batch_size": batch_size,
-            "running": True,
+            "image_size": image_size,
         }
     )
 
 
 @app.route("/api/train/status")
 def api_train_status():
-    return ok(train_status.copy())
+    return ok(train_status)
 
 
-# ============================================================
-# [12] Deploy stub (autopilot stub)
-# ============================================================
+def load_policy_model(model_name: str = None):
+    """
+    Load trained model into globals for autopilot.
+    """
+    global autopilot_model, autopilot_device, autopilot_image_size
+
+    if not TORCH_AVAILABLE or TinySteerNet is None:
+        return False, "PyTorch not available"
+
+    model_name = model_name or autopilot_cfg.get("default_model", "aicar_latest.pt")
+    model_path = os.path.join(MODELS_ROOT, model_name)
+    if not os.path.exists(model_path):
+        return False, f"model not found: {model_name}"
+
+    try:
+        ckpt = torch.load(model_path, map_location="cpu")
+        image_size = tuple(ckpt.get("image_size", autopilot_image_size))
+        model = TinySteerNet()
+        model.load_state_dict(ckpt["model_state"])
+        model.eval()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+
+        autopilot_model = model
+        autopilot_device = device
+        autopilot_image_size = image_size
+
+        logger.info(
+            "Autopilot: loaded model %s on %s (image_size=%s)",
+            model_path,
+            device,
+            image_size,
+        )
+        return True, None
+    except Exception as e:
+        logger.exception("Failed to load policy model")
+        autopilot_model = None
+        return False, str(e)
+
+
+@app.route("/api/train/validate")
+def api_train_validate():
+    """
+    Simple validation stub.
+
+    For now:
+      - counts how many .jpg files exist in the chosen dataset
+      - returns basic info + a fake metric so the UI can show something
+
+    Later:
+      - replace "metrics" with real loss / MAE / etc. from your trained model.
+    """
+    name = request.args.get("dataset", current_dataset).strip()
+    ds_dir = os.path.join(DATASETS_ROOT, name)
+    if not os.path.isdir(ds_dir):
+        return err(f"dataset not found: {name}", 404)
+
+    files = sorted(
+        f for f in os.listdir(ds_dir)
+        if f.lower().endswith(".jpg")
+    )
+    n = len(files)
+
+    # stub metrics – you will replace these with real model evaluation later
+    metrics = {
+        "samples": n,
+        "mse": None,
+        "mae": None,
+        "note": "stub validation – no real model yet",
+    }
+
+    return ok({
+        "dataset": name,
+        "num_images": n,
+        "metrics": metrics,
+    })
+
+
+def run_policy_on_frame(frame_bgr):
+    """
+    Run current policy model on a BGR frame, return (left,right) ∈ [0,1].
+    """
+    if not TORCH_AVAILABLE or autopilot_model is None:
+        return 0.0, 0.0
+
+    img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    w, h = autopilot_image_size
+    img = cv2.resize(img_rgb, (w, h), interpolation=cv2.INTER_LINEAR)
+    x = img.astype("float32") / 255.0
+    x = np.transpose(x, (2, 0, 1))
+    x = np.expand_dims(x, 0)
+
+    with torch.no_grad():
+        t = torch.from_numpy(x).to(autopilot_device)
+        out = autopilot_model(t)
+        left, right = out[0].cpu().numpy().tolist()
+
+    left = float(max(0.0, min(1.0, left)))
+    right = float(max(0.0, min(1.0, right)))
+    return left, right
+
 
 def _autopilot_loop():
-    logger.info("Autopilot stub started")
+    logger.info("[autopilot] loop started")
+    if not TORCH_AVAILABLE or autopilot_model is None:
+        logger.error("Autopilot: no model / torch; exiting loop")
+        deploy_status["autopilot"] = False
+        return
+
+    fps = float(autopilot_cfg.get("fps", 20))
+    dt = 1.0 / max(1.0, fps)
+
     while deploy_status["autopilot"]:
-        time.sleep(0.2)
-        # could update some fake internal state here
-    logger.info("Autopilot stub stopped")
+        frame = camera.get_frame()
+        if frame is None:
+            time.sleep(0.02)
+            continue
+
+        base_left, base_right = run_policy_on_frame(frame)
+
+        gains = deploy_status.get("gains", {})
+        throttle_gain = float(gains.get("throttle_gain", 1.0))
+        steering_gain = float(gains.get("steering_gain", 1.0))
+        expo = float(gains.get("expo", 1.0))
+
+        # apply throttle gain and expo per wheel
+        left = max(0.0, min(1.0, base_left * throttle_gain))
+        right = max(0.0, min(1.0, base_right * throttle_gain))
+
+        expo = max(0.5, min(3.0, expo))
+        left = left ** expo
+        right = right ** expo
+
+        if steering_gain != 1.0:
+            mid = 0.5 * (left + right)
+            dl = (left - mid) * steering_gain
+            dr = (right - mid) * steering_gain
+            left = max(0.0, min(1.0, mid + dl))
+            right = max(0.0, min(1.0, mid + dr))
+
+        with control_lock:
+            if deploy_status.get("drive_motors", False):
+                control_state["left_target"] = left
+                control_state["right_target"] = right
+            else:
+                control_state["left_target"] = 0.0
+                control_state["right_target"] = 0.0
+
+        time.sleep(dt)
+
+    with control_lock:
+        control_state["left_target"] = 0.0
+        control_state["right_target"] = 0.0
+    logger.info("[autopilot] loop stopped")
 
 
 @app.route("/api/deploy/start", methods=["POST"])
@@ -1285,36 +1724,95 @@ def api_deploy_start():
     global _autopilot_thread
     if deploy_status["autopilot"]:
         return err("autopilot already running", 409)
+
+    body = request.get_json(silent=True) or {}
+    model_name = body.get("model") or autopilot_cfg.get(
+        "default_model", "aicar_latest.pt"
+    )
+
+    ok_model, msg = load_policy_model(model_name)
+    if not ok_model:
+        return err(f"model load failed: {msg}", 500)
+
     deploy_status["autopilot"] = True
+    deploy_status["model"] = model_name
     _autopilot_thread = threading.Thread(target=_autopilot_loop, daemon=True)
     _autopilot_thread.start()
-    return ok(deploy_status.copy())
+    return ok(deploy_status)
 
 
 @app.route("/api/deploy/stop", methods=["POST"])
 def api_deploy_stop():
     deploy_status["autopilot"] = False
-    return ok(deploy_status.copy())
+    return ok(deploy_status)
 
 
 @app.route("/api/deploy/status")
 def api_deploy_status():
-    return ok(deploy_status.copy())
+    return ok(deploy_status)
 
 
 @app.route("/api/deploy/gains", methods=["POST"])
 def api_deploy_gains():
     body = request.get_json(silent=True) or {}
-    g = deploy_status["gains"]
-    if "throttle_gain" in body:
-        g["throttle_gain"] = float(body["throttle_gain"])
-    if "steering_gain" in body:
-        g["steering_gain"] = float(body["steering_gain"])
-    if "expo" in body:
-        g["expo"] = float(body["expo"])
-    if "drive_motors" in body:
-        deploy_status["drive_motors"] = bool(body["drive_motors"])
-    return ok(deploy_status.copy())
+    throttle_gain = float(
+        body.get("throttle_gain", deploy_status["gains"]["throttle_gain"])
+    )
+    steering_gain = float(
+        body.get("steering_gain", deploy_status["gains"]["steering_gain"])
+    )
+    expo = float(body.get("expo", deploy_status["gains"]["expo"]))
+    drive_motors = bool(body.get("drive_motors", deploy_status["drive_motors"]))
+
+    deploy_status["gains"].update(
+        throttle_gain=throttle_gain,
+        steering_gain=steering_gain,
+        expo=expo,
+    )
+    deploy_status["drive_motors"] = drive_motors
+    return ok(deploy_status)
+
+
+@app.route("/api/deploy/test_frame")
+def api_deploy_test_frame():
+    """
+    Real-time test stub.
+
+    - Requires camera to be ON.
+    - Grabs one processed frame (or raw).
+    - Returns:
+        * image size
+        * a fake "prediction" (center of grid)
+        * placeholder left/right command
+    Later:
+        * replace the prediction logic with a real model.
+    """
+    if not camera_on:
+        return err("camera is OFF", 409)
+
+    frame = camera.get_frame() or camera.get_raw()
+    if frame is None:
+        return err("no frame available", 409)
+
+    h, w = frame.shape[:2]
+
+    # for now: pretend the model predicts the center of the image/grid
+    X = 75  # 0..149 grid centre
+    Y = 75
+
+    # and some placeholder motor command (stopped)
+    left = 0.0
+    right = 0.0
+
+    return ok({
+        "image_width": int(w),
+        "image_height": int(h),
+        "click_X": int(X),
+        "click_Y": int(Y),
+        "left": float(left),
+        "right": float(right),
+        "note": "stub prediction – wire your real model here",
+    })
 
 
 # ============================================================
