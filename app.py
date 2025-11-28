@@ -1159,6 +1159,16 @@ def api_camera_config():
 # [8] Datasets & labeling
 # ============================================================
 
+def _ensure_dataset(name: str) -> str:
+    """
+    Ensure dataset directory exists and return its absolute path.
+    """
+    name = (name or "").strip() or "default"
+    ds_dir = os.path.join(DATASETS_ROOT, name)
+    os.makedirs(ds_dir, exist_ok=True)
+    return ds_dir
+
+
 @app.route("/api/datasets")
 def api_datasets():
     ds = []
@@ -1176,8 +1186,7 @@ def api_datasets_select():
     name = (body.get("name") or "").strip()
     if not name:
         return err("name required", 400)
-    full = os.path.join(DATASETS_ROOT, name)
-    os.makedirs(full, exist_ok=True)
+    _ensure_dataset(name)
     current_dataset = name
     return ok({"current": current_dataset})
 
@@ -1216,7 +1225,7 @@ def api_label_click():
     if not camera_on:
         return err("camera off", 409)
 
-    frame = camera.get_raw()
+    frame = camera.get_frame()
     if frame is None:
         return err("no camera frame", 409)
 
@@ -1285,7 +1294,7 @@ def _teleop_log_loop():
 
     while log_state["running"]:
         # grab raw frame
-        frame = camera.get_raw()
+        frame = camera.get_frame()
         if frame is None:
             time.sleep(0.01)
             continue
