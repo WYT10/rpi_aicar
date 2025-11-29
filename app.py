@@ -41,6 +41,7 @@ try:
     import torch.nn as nn
     import torch.optim as optim
     from torch.utils.data import Dataset, DataLoader
+    from torch.quantization import quantize_dynamic
 
     TORCH_AVAILABLE = True
 except Exception:
@@ -50,6 +51,7 @@ except Exception:
     optim = None
     Dataset = None
     DataLoader = None
+    quantize_dynamic = None
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
@@ -1621,6 +1623,78 @@ def api_models():
         }
     )
 
+@app.route("/api/models/convert", methods=["POST"])
+def api_models_convert():
+    """
+    Convert a saved TinySteerNet checkpoint to a smaller variant (currently: int8).
+
+    Body JSON:
+      {
+        "source": "aicar_default_1732812345.pt",  # required: filename in MODELS_ROOT
+        "dtype": "int8",                         # optional, only "int8" supported for now
+        "suffix": "_int8"                        # optional, appended before .pt
+      }
+
+    Result:
+      - Creates <basename><suffix>.pt in MODELS_ROOT
+      - Uses dynamic quantization on Linear layers
+    """
+    if not TORCH_AVAILABLE or TinySteerNet is None or quantize_dynamic is None:
+        return err("PyTorch / TinySteerNet / quantization not available", 500)
+
+    body = request.get_json(silent=True) or {}
+    src_name = (body.get("source") or "").strip()
+    if not src_name:
+        return err("source model is required", 400)
+
+    dtype_str = str(body.get("dtype", "int8")).lower()
+    suffix = str(body.get("suffix", "_int8"))
+
+    if dtype_str not in ("int8", "qint8"):
+        return err("only int8 dynamic quantization is supported for now", 400)
+
+    src_path = os.path.join(MODELS_ROOT, src_name)
+    if not os.path.exists(src_path):
+        return err(f"source model not found: {src_name}", 404)
+
+    base, ext = os.path.splitext(src_name)
+    out_name = f"{base}{suffix}{ext}"
+    out_path = os.path.join(MODELS_ROOT, out_name)
+
+    try:
+        # Load original checkpoint
+        ckpt = torch.load(src_path, map_location="cpu")
+        image_size = tuple(ckpt.get("image_size", autopilot_image_size))
+
+        # Rebuild TinySteerNet and load weights
+        model = TinySteerNet()
+        model.load_state_dict(ckpt["model_state"])
+        model.eval()
+
+        # Dynamic quantization on Linear layers
+        q_model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
+        q_model.eval()
+
+        # Save quantized checkpoint
+        q_ckpt = {
+            "model_state": q_model.state_dict(),
+            "image_size": image_size,
+            "dtype": "int8_dynamic",
+            "source": src_name,
+        }
+        torch.save(q_ckpt, out_path)
+        logger.info("Quantized model: %s -> %s", src_path, out_path)
+
+        return ok(
+            {
+                "source": src_name,
+                "output": out_name,
+                "dtype": "int8_dynamic",
+            }
+        )
+    except Exception as e:
+        logger.exception("Model conversion failed")
+        return err(f"conversion failed: {e}", 500)
 
 def load_policy_model(model_name: str = None):
     """

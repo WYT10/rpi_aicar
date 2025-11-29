@@ -743,10 +743,12 @@
         <select id="deploy-model"></select>
       </label>
       <button onclick="refreshModels()">Refresh models</button>
+      <button onclick="convertSelectedModelToInt8()">Make INT8 copy</button>
       <span id="model-status" class="pill">
         <span class="pill-dot"></span> no model loaded
       </span>
     </div>
+
 
     <!-- Control row (autopilot + live test) -->
     <div class="row">
@@ -1721,6 +1723,72 @@
         }
       } catch (e) {
         alert("Model list exception: " + e);
+      }
+    }
+
+    async function refreshModels() {
+      try {
+        const res = await fetch("/api/models");
+        const data = await res.json();
+        if (!data.ok) {
+          alert("Model list error: " + data.error);
+          return;
+        }
+        const sel = document.getElementById("deploy-model");
+        if (!sel) return;
+        sel.innerHTML = "";
+        const items = data.data.items || [];
+        for (const m of items) {
+          const opt = document.createElement("option");
+          opt.value = m.name;
+          opt.textContent = m.name + " (" + m.kind + ", " + m.size_kb + " KB)";
+          sel.appendChild(opt);
+        }
+        // status pill
+        const pill = document.getElementById("model-status");
+        if (pill) {
+          if (items.length) {
+            pill.innerHTML =
+              '<span class="pill-dot pill-ok"></span> ' + items.length + ' model(s) found';
+          } else {
+            pill.innerHTML =
+              '<span class="pill-dot"></span> no models yet';
+          }
+        }
+      } catch (e) {
+        alert("Model list exception: " + e);
+      }
+    }
+
+    async function convertSelectedModelToInt8() {
+      const sel = document.getElementById("deploy-model");
+      if (!sel || !sel.value) {
+        alert("Select a model first.");
+        return;
+      }
+
+      const source = sel.value;
+      if (!confirm("Create INT8 copy of: " + source + " ?")) {
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/models/convert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source, dtype: "int8" })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          alert("Convert error: " + data.error);
+          return;
+        }
+        const d = data.data || {};
+        alert("Created: " + d.output + " (from " + d.source + ")");
+        // Refresh list so new *_int8.pt appears and gets picked up with kind="int8"
+        refreshModels();
+      } catch (e) {
+        alert("Convert exception: " + e);
       }
     }
 

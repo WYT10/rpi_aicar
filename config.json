@@ -10,17 +10,17 @@
   },
   "motor": {
     "pins": {
-      "left_forward": 20,
-      "left_backward": 21,
-      "right_forward": 5,
-      "right_backward": 6,
+      "left_forward": 17,
+      "left_backward": 27,
+      "right_forward": 22,
+      "right_backward": 23,
       "left_pwm": null,
       "right_pwm": null,
       "stby": null
     },
     "invert_left": true,
     "invert_right": false,
-    "pwm_freq": 800,
+    "pwm_freq": 1500,
     "max_duty_pct": 90,
     "deadzone": 0.03
   },
