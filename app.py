@@ -1,6 +1,3 @@
---- START OF FILE app.py ---
-
-#!/usr/bin/env python3
 """
 AI CAR SERVER – SECTION MAP
 
