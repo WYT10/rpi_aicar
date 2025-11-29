@@ -17,14 +17,12 @@
         .dot.ok { background: var(--success); }
         .dot.bad { background: var(--danger); }
 
-        /* Layout */
         .grid { display: grid; grid-template-columns: 350px 1fr; gap: 20px; }
         @media(max-width: 900px) { .grid { grid-template-columns: 1fr; } }
         
         .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 15px; }
         .row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
         
-        /* Controls */
         button { background: #21262d; border: 1px solid var(--border); color: var(--text); padding: 5px 12px; border-radius: 6px; cursor: pointer; transition: 0.2s; }
         button:hover { background: #30363d; border-color: #8b949e; }
         button.primary { background: #1f6feb; border-color: rgba(27,31,35,0.15); color: #fff; }
@@ -33,7 +31,6 @@
         
         input, select { background: #0d1117; border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; }
         
-        /* Video & Joystick */
         .video-container { position: relative; width: 224px; height: 224px; background: #000; border: 2px solid var(--border); border-radius: 4px; margin: 0 auto; }
         #video { width: 100%; height: 100%; object-fit: cover; cursor: crosshair; }
         #click-marker { position: absolute; width: 12px; height: 12px; border: 2px solid var(--accent); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; display: none; box-shadow: 0 0 4px white; }
@@ -41,7 +38,6 @@
         #joystick-zone { width: 200px; height: 200px; border-radius: 50%; background: #21262d; border: 2px solid var(--border); position: relative; margin: 10px auto; touch-action: none; }
         #joystick-knob { width: 60px; height: 60px; border-radius: 50%; background: var(--accent); position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0.8; pointer-events: none; }
 
-        /* Tabs */
         .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 15px; }
         .tab { padding: 8px 16px; cursor: pointer; border-bottom: 2px solid transparent; }
         .tab.active { border-bottom-color: var(--accent); font-weight: bold; color: #fff; }
@@ -56,7 +52,7 @@
 
 <div class="header">
     <div style="display:flex;align-items:center;">
-        <h3>AI Car Studio <span style="font-size:0.6em;opacity:0.6;font-weight:400;">v3.5 Full Power</span></h3>
+        <h3>AI Car Studio <span style="font-size:0.6em;opacity:0.6;font-weight:400;">v3.5 FP</span></h3>
         <span class="pill" id="fps-pill"><div class="dot"></div> FPS: 0</span>
     </div>
     <div>
@@ -66,7 +62,6 @@
 </div>
 
 <div class="grid">
-    <!-- Left Column: Controls & Video -->
     <div>
         <div class="panel">
             <div class="row" style="justify-content: center;">
@@ -85,9 +80,7 @@
 
         <div class="panel">
             <h4>Manual Control</h4>
-            <div id="joystick-zone">
-                <div id="joystick-knob"></div>
-            </div>
+            <div id="joystick-zone"><div id="joystick-knob"></div></div>
             <div class="row" style="justify-content: center;">
                 <span style="font-family: monospace;">L: <span id="val-l">0.0</span> R: <span id="val-r">0.0</span></span>
                 <button class="danger" onclick="stopMotors()">STOP</button>
@@ -99,7 +92,6 @@
         </div>
     </div>
 
-    <!-- Right Column: Tabs -->
     <div>
         <div class="tabs">
             <div class="tab active" onclick="setTab('train')">Train</div>
@@ -107,7 +99,6 @@
             <div class="tab" onclick="setTab('settings')">Settings</div>
         </div>
 
-        <!-- TRAIN TAB -->
         <div id="view-train" class="tab-content active">
             <div class="panel">
                 <div class="row">
@@ -130,17 +121,12 @@
                     <button onclick="testFrame()">Test Current Frame</button>
                 </div>
                 <div style="display:flex; gap:10px; margin-top:10px;">
-                    <div style="flex:1">
-                        <pre id="valid-res">Metrics will appear here.</pre>
-                    </div>
-                    <div style="flex:1">
-                        <img id="test-img" class="debug-img">
-                    </div>
+                    <div style="flex:1"><pre id="valid-res">Metrics will appear here.</pre></div>
+                    <div style="flex:1"><img id="test-img" class="debug-img"></div>
                 </div>
             </div>
         </div>
 
-        <!-- DEPLOY TAB -->
         <div id="view-deploy" class="tab-content">
             <div class="panel">
                 <div class="row">
@@ -169,7 +155,6 @@
             </div>
         </div>
 
-        <!-- SETTINGS TAB -->
         <div id="view-settings" class="tab-content">
             <div class="panel">
                 <h4>Camera</h4>
@@ -184,7 +169,9 @@
 </div>
 
 <script>
-    // --- CORE API ---
+    const getVal = (id) => document.getElementById(id).value;
+    const setHtml = (id, html) => { const el = document.getElementById(id); if(el) el.innerHTML = html; };
+    
     async function api(endpoint, data=null, cb=null) {
         try {
             const opts = data ? { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) } : {};
@@ -194,17 +181,14 @@
             return json;
         } catch(e) { console.error(e); }
     }
-    const getVal = (id) => document.getElementById(id).value;
-    const setHtml = (id, html) => document.getElementById(id).innerHTML = html;
 
-    // --- STATE LOOP ---
     function updateState() {
         api('health', null, d => {
             if(d.ok) {
                 const dd = d.data;
                 setHtml('cam-badge', `Cam: ${dd.camera_on ? 'ON' : 'OFF'}`);
                 setHtml('fps-pill', `<div class="dot ${dd.camera_on?'ok':'bad'}"></div> FPS: ${dd.camera_fps}`);
-                if(dd.camera_on) document.getElementById('video').src = "/api/video?t=" + Date.now(); // reconnect stream logic implied
+                if(dd.camera_on) document.getElementById('video').src = "/api/video?t=" + Date.now();
             }
         });
         api('deploy/status', null, d => {
@@ -216,10 +200,8 @@
             }
         });
     }
-    // Poll slower for UI updates
     setInterval(updateState, 2000); 
 
-    // --- UI TABS ---
     function setTab(name) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -227,7 +209,6 @@
         document.getElementById('view-'+name).classList.add('active');
     }
 
-    // --- CAMERA & DATA ---
     function camSettings() {
         api('camera/settings', {
             vflip: document.getElementById('vflip').checked,
@@ -240,67 +221,38 @@
         const rect = e.target.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        
-        // Visual
         const m = document.getElementById('click-marker');
         m.style.left = x + 'px'; m.style.top = y + 'px';
         m.style.display = 'block';
-
-        // API
-        api('data/label_click', {
-            x: x, y: y, 
-            image_width: rect.width, image_height: rect.height
-        }, d => {
+        api('data/label_click', { x: x, y: y, image_width: rect.width, image_height: rect.height }, d => {
             if(d.ok) document.getElementById('label-status').textContent = "Saved: " + d.data.saved;
         });
     }
 
-    // --- JOYSTICK ---
     const joy = document.getElementById('joystick-zone');
     const knob = document.getElementById('joystick-knob');
     let driving = false;
 
-    joy.addEventListener('pointerdown', e => {
-        driving = true; joy.setPointerCapture(e.pointerId); moveJoy(e);
-    });
+    joy.addEventListener('pointerdown', e => { driving = true; joy.setPointerCapture(e.pointerId); moveJoy(e); });
     joy.addEventListener('pointermove', e => { if(driving) moveJoy(e); });
     joy.addEventListener('pointerup', stopJoy);
     joy.addEventListener('pointercancel', stopJoy);
 
     function stopJoy() {
-        driving = false;
-        knob.style.left = '50%'; knob.style.top = '50%';
-        stopMotors();
+        driving = false; knob.style.left = '50%'; knob.style.top = '50%'; stopMotors();
     }
 
     function moveJoy(e) {
         const rect = joy.getBoundingClientRect();
-        const cx = rect.width / 2;
-        const cy = rect.height / 2;
-        let dx = e.clientX - rect.left - cx;
-        let dy = e.clientY - rect.top - cy;
-        
-        // Limit radius
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        const maxR = cx - 30; // knob radius
-        if (dist > maxR) {
-            dx *= maxR / dist;
-            dy *= maxR / dist;
-        }
-        
-        knob.style.left = (cx + dx) + 'px';
-        knob.style.top = (cy + dy) + 'px';
-
-        // Calculate mixing (Forward/Back = Y, Turn = X)
-        const fwd = -(dy / maxR); // -1 to 1
-        const turn = (dx / maxR); // -1 to 1
-        
-        const l = fwd + turn;
-        const r = fwd - turn;
-        
+        const cx = rect.width / 2; const cy = rect.height / 2;
+        let dx = e.clientX - rect.left - cx; let dy = e.clientY - rect.top - cy;
+        const dist = Math.sqrt(dx*dx + dy*dy); const maxR = cx - 30;
+        if (dist > maxR) { dx *= maxR / dist; dy *= maxR / dist; }
+        knob.style.left = (cx + dx) + 'px'; knob.style.top = (cy + dy) + 'px';
+        const fwd = -(dy / maxR); const turn = (dx / maxR);
+        const l = fwd + turn; const r = fwd - turn;
         document.getElementById('val-l').textContent = l.toFixed(2);
         document.getElementById('val-r').textContent = r.toFixed(2);
-        
         api('motors/openloop', {left: l, right: r});
     }
     
@@ -310,7 +262,6 @@
         document.getElementById('val-r').textContent = "0.0";
     }
 
-    // --- TRAIN & DATASETS ---
     function refreshDatasets() {
         api('datasets', null, d => {
             const s = document.getElementById('ds-select');
@@ -321,9 +272,7 @@
     }
     
     function startTrain() {
-        const ds = document.getElementById('ds-select').value;
-        const ep = document.getElementById('epochs').value;
-        api('train/start', {dataset: ds, epochs: ep});
+        api('train/start', {dataset: document.getElementById('ds-select').value, epochs: document.getElementById('epochs').value});
         pollTrain();
     }
     
@@ -335,25 +284,25 @@
     }
 
     function validate() {
-        const ds = document.getElementById('ds-select').value;
         document.getElementById('valid-res').textContent = "Running...";
-        api('train/validate?dataset='+ds, null, d => {
+        api('train/validate?dataset='+document.getElementById('ds-select').value, null, d => {
             document.getElementById('valid-res').textContent = JSON.stringify(d.data, null, 2);
         });
     }
 
     function testFrame() {
-        api('deploy/test_frame', {model: document.getElementById('model-select').value}, d => {
+        api('deploy/test_frame?model='+document.getElementById('model-select').value, null, d => {
             if(d.ok) {
                 const img = document.getElementById('test-img');
                 img.src = d.data.debug_image;
                 img.style.display = 'block';
                 document.getElementById('valid-res').textContent = `L:${d.data.left} R:${d.data.right}`;
+            } else {
+                document.getElementById('valid-res').textContent = "Error: " + d.error;
             }
         });
     }
 
-    // --- DEPLOY ---
     function refreshModels() {
         api('models', null, d => {
             const s = document.getElementById('model-select');
@@ -363,10 +312,7 @@
         });
     }
 
-    function startAP() {
-        api('deploy/start', {model: document.getElementById('model-select').value});
-    }
-    
+    function startAP() { api('deploy/start', {model: document.getElementById('model-select').value}); }
     function stopAP() { api('deploy/stop'); }
     
     function updateGains() {
@@ -388,7 +334,6 @@
         });
     }
 
-    // --- GHOST ---
     let ghostInt;
     function toggleGhost(on) {
         if(ghostInt) clearInterval(ghostInt);
@@ -396,11 +341,9 @@
         if(!on) { m.style.display='none'; return; }
         
         ghostInt = setInterval(() => {
-            // Note: Reuse test endpoint with GET for speed
             fetch('/api/deploy/test_frame?model='+document.getElementById('model-select').value)
                 .then(r=>r.json()).then(d => {
                     if(d.ok) {
-                        // Map grid 0-149 to 0-224px
                         const x = (d.data.click_X / 149.0) * 224;
                         const y = (d.data.click_Y / 149.0) * 224;
                         m.style.left = x + 'px'; m.style.top = y + 'px';
@@ -410,11 +353,9 @@
         }, 200);
     }
 
-    // Init
     refreshDatasets();
     refreshModels();
-    document.getElementById('video').src = "/api/video"; // Start stream
+    document.getElementById('video').src = "/api/video";
 </script>
-
 </body>
 </html>

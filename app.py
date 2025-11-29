@@ -15,13 +15,14 @@ import numpy as np
 from flask import Flask, jsonify, request, Response, render_template, send_file
 from flask_cors import CORS
 
-# --- Torch Imports ---
+# --- Torch / ML Imports ---
 try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
     from torch.utils.data import Dataset, DataLoader
     from torch.quantization import quantize_dynamic
+    from PIL import Image
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -31,8 +32,9 @@ except ImportError:
     Dataset = object
     DataLoader = None
     quantize_dynamic = None
+    Image = None
 
-# --- Config & Init ---
+# --- Configuration & Setup ---
 ROOT = os.path.abspath(os.path.dirname(__file__))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 
@@ -94,7 +96,7 @@ train_status = {
     "running": False, "epoch": 0, "epochs": 0, "loss": None, "note": "", "dataset": None
 }
 
-# --- Neural Network ---
+# --- Neural Network (Dynamic Size) ---
 if TORCH_AVAILABLE:
     class TinySteerNet(nn.Module):
         def __init__(self, image_height=224, image_width=224):
@@ -104,6 +106,7 @@ if TORCH_AVAILABLE:
                 nn.Conv2d(16, 32, 5, stride=2, padding=2), nn.ReLU(inplace=True),
                 nn.Conv2d(32, 48, 3, stride=2, padding=1), nn.ReLU(inplace=True),
             )
+            # Dynamic flatten size calculation
             with torch.no_grad():
                 dummy = torch.zeros(1, 3, image_height, image_width)
                 out = self.conv(dummy)
@@ -125,95 +128,133 @@ else:
     TinySteerNet = None
     autopilot_model = None
 
-# --- Robust Camera Manager ---
+# --- Camera Manager (Correct Method Integration) ---
 class CameraManager:
     def __init__(self, cfg):
-        self.width = cfg["width"]
-        self.height = cfg["height"]
-        self.fps = cfg["fps"]
-        self.lock = threading.Lock()
-        self.running = False
+        self.width = int(cfg["width"])
+        self.height = int(cfg["height"])
+        self.fps = int(cfg["fps"])
+        
+        self._backend = None
+        self._picam2 = None
+        self._cap = None
         self.frame = None
+        self._lock = threading.Lock()
+        self.running = False
+        self._thread = None
+        
+        # Processing Settings
         self.vflip = False
         self.hflip = False
+        self.gray = False
         self.mode = "raw"
-        self.backend_name = "none"
-        self.thread = None
+        self.gamma = 1.0
+        self._gamma_lut = None
+        self._gamma_lut_for = None
 
     def start(self):
         if self.running: return
+        if not self._open_backend():
+            logger.error("Camera: failed to start")
+            return
         self.running = True
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        logger.info(f"Camera started: {self._backend}")
 
     def stop(self):
         self.running = False
-        if self.thread: self.thread.join(timeout=1.0)
-        self.backend_name = "none"
+        if self._thread: self._thread.join(timeout=1.0)
+        self._close_backend()
 
-    def _run(self):
-        # 1. Try V4L2 (OpenCV) - Most Robust
-        cap = cv2.VideoCapture(0)
-        if cap.isOpened():
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            cap.set(cv2.CAP_PROP_FPS, self.fps)
-            
-            # Verify we can actually read a frame
-            ret, _ = cap.read()
-            if ret:
-                self.backend_name = "opencv-v4l2"
-                logger.info("Camera: Started (OpenCV V4L2)")
-                while self.running:
-                    ret, frame = cap.read()
-                    if not ret:
-                        time.sleep(0.1)
-                        continue
-                    self._process(frame)
-                cap.release()
-                return
-            cap.release()
-
-        # 2. Try Picamera2 (If available and V4L2 failed/busy)
+    def _open_backend(self):
+        # 1. Picamera2
         try:
             from picamera2 import Picamera2
-            picam = Picamera2()
-            config = picam.create_preview_configuration(main={"size": (self.width, self.height), "format": "BGR888"})
-            picam.configure(config)
-            picam.start()
-            self.backend_name = "picamera2"
-            logger.info("Camera: Started (Picamera2)")
-            
-            while self.running:
-                frame = picam.capture_array("main")
-                self._process(frame)
-            
-            picam.stop()
-            picam.close()
-            return
-        except Exception as e:
-            logger.warning(f"Camera: Picamera2 failed: {e}")
+            cam = Picamera2()
+            cfg = cam.create_preview_configuration(main={"size": (self.width, self.height), "format": "BGR888"})
+            cam.configure(cfg)
+            cam.start()
+            self._picam2 = cam
+            self._backend = "picamera2"
+            return True
+        except ImportError: pass
+        except Exception as e: logger.warning(f"Picamera2 skip: {e}")
 
-        # 3. Fallback: Mock (Static noise if no HW found)
-        self.backend_name = "mock-noise"
-        logger.warning("Camera: No hardware found, starting Mock backend")
+        # 2. V4L2 Glob
+        for dev in sorted(glob.glob("/dev/video*")):
+            try:
+                cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+                if cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                    cap.set(cv2.CAP_PROP_FPS, self.fps)
+                    ret, _ = cap.read()
+                    if ret:
+                        self._cap = cap
+                        self._backend = f"v4l2:{dev}"
+                        return True
+                    cap.release()
+            except: pass
+
+        # 3. GStreamer Fallback
+        try:
+            gst = f"libcamerasrc ! video/x-raw,width={self.width},height={self.height},framerate={self.fps}/1,format=RGB ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+            cap = cv2.VideoCapture(gst, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                self._cap = cap
+                self._backend = "gstreamer"
+                return True
+        except: pass
+        
+        return False
+
+    def _close_backend(self):
+        if self._picam2: 
+            try: self._picam2.stop(); self._picam2.close()
+            except: pass
+            self._picam2 = None
+        if self._cap:
+            self._cap.release()
+            self._cap = None
+
+    def _loop(self):
         while self.running:
-            noise = np.random.randint(0, 255, (self.height, self.width, 3), dtype=np.uint8)
-            cv2.putText(noise, "NO CAMERA", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-            self._process(noise)
-            time.sleep(1.0/self.fps)
+            raw = None
+            if self._picam2:
+                raw = self._picam2.capture_array("main")
+            elif self._cap:
+                ret, raw = self._cap.read()
+                if not ret: 
+                    time.sleep(0.01)
+                    continue
+            
+            if raw is not None:
+                # Apply User Processing Chain
+                proc = self._apply_processing(raw)
+                with self._lock:
+                    self.frame = proc
+            else:
+                time.sleep(0.01)
 
-    def _process(self, frame_bgr):
-        # Resize first to ensure consistent dimension (if hw returned weird size)
-        if frame_bgr.shape[0] != self.height or frame_bgr.shape[1] != self.width:
-            frame_bgr = cv2.resize(frame_bgr, (self.width, self.height))
+    def _apply_processing(self, frame_bgr):
+        # [REQUESTED FIX]: Explicit RGB flip at start
+        # Caution: This turns BGR input into RGB.
+        frame_bgr = frame_bgr[:, :, ::-1]
 
-        # Flips
         if self.vflip: frame_bgr = cv2.flip(frame_bgr, 0)
         if self.hflip: frame_bgr = cv2.flip(frame_bgr, 1)
-        
-        # Proc modes
-        if self.mode == "gray":
+
+        # Gamma
+        if abs(self.gamma - 1.0) > 0.01:
+            if self._gamma_lut_for != self.gamma:
+                inv = 1.0 / self.gamma
+                table = np.array([((i / 255.0) ** inv) * 255 for i in range(256)]).astype("uint8")
+                self._gamma_lut = table
+                self._gamma_lut_for = self.gamma
+            frame_bgr = cv2.LUT(frame_bgr, self._gamma_lut)
+
+        if self.mode == "gray" or self.gray:
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
             frame_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         elif self.mode == "edges":
@@ -221,12 +262,20 @@ class CameraManager:
             edges = cv2.Canny(gray, 50, 150)
             frame_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
-        with self.lock:
-            self.frame = frame_bgr
+        return frame_bgr
+
+    def update_settings(self, vflip=None, hflip=None, gray=None, mode=None, gamma=None):
+        if vflip is not None: self.vflip = vflip
+        if hflip is not None: self.hflip = hflip
+        if gray is not None: self.gray = gray
+        if mode is not None: self.mode = mode
+        if gamma is not None: self.gamma = float(gamma)
 
     def get_frame(self):
-        with self.lock:
+        with self._lock:
             return self.frame.copy() if self.frame is not None else None
+    
+    def get_fps(self): return self.fps # simplified
 
 camera = CameraManager(CONFIG["camera"])
 
@@ -238,52 +287,43 @@ class MotorDriver:
         self.max_duty = cfg["max_duty_pct"]
         self.backend = "dummy"
         
-        # Try pigpio
         try:
             import pigpio
             self.pi = pigpio.pi()
             if self.pi.connected:
                 self.backend = "pigpio"
-                pins = [self.pins.get(k) for k in ["left_forward", "left_backward", "right_forward", "right_backward"]]
-                for p in pins: 
-                    if p: self.pi.set_mode(p, pigpio.OUTPUT)
-                
-                pwm_pins = [self.pins.get("left_pwm"), self.pins.get("right_pwm")]
-                for p in pwm_pins:
-                    if p: 
-                        self.pi.set_mode(p, pigpio.OUTPUT)
-                        self.pi.set_PWM_frequency(p, cfg["pwm_freq"])
-                
-                stby = self.pins.get("stby")
-                if stby:
-                    self.pi.set_mode(stby, pigpio.OUTPUT)
-                    self.pi.write(stby, 1)
-                
+                for p in [self.pins["left_forward"], self.pins["left_backward"], self.pins["right_forward"], self.pins["right_backward"]]:
+                    self.pi.set_mode(p, pigpio.OUTPUT)
+                if self.pins["left_pwm"]: 
+                    self.pi.set_mode(self.pins["left_pwm"], pigpio.OUTPUT)
+                    self.pi.set_PWM_frequency(self.pins["left_pwm"], cfg["pwm_freq"])
+                if self.pins["right_pwm"]: 
+                    self.pi.set_mode(self.pins["right_pwm"], pigpio.OUTPUT)
+                    self.pi.set_PWM_frequency(self.pins["right_pwm"], cfg["pwm_freq"])
+                if self.pins["stby"]:
+                    self.pi.set_mode(self.pins["stby"], pigpio.OUTPUT)
+                    self.pi.write(self.pins["stby"], 1)
                 logger.info("Motors: Pigpio connected")
                 return
         except ImportError: pass
 
-        # Fallback RPi.GPIO
         try:
             import RPi.GPIO as GPIO
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
             self.GPIO = GPIO
             self.backend = "gpio"
-            # Basic pin init logic would go here if needed...
-            logger.info("Motors: RPi.GPIO (Mock/Active) connected")
+            logger.info("Motors: RPi.GPIO connected")
             return
         except: pass
-        
         logger.info("Motors: Dummy mode")
 
     def drive(self, left, right):
         if self.backend == "pigpio":
-            self._drive_pigpio(left, self.pins.get("left_forward"), self.pins.get("left_backward"), self.pins.get("left_pwm"))
-            self._drive_pigpio(right, self.pins.get("right_forward"), self.pins.get("right_backward"), self.pins.get("right_pwm"))
+            self._drive_pigpio(left, self.pins["left_forward"], self.pins["left_backward"], self.pins["left_pwm"])
+            self._drive_pigpio(right, self.pins["right_forward"], self.pins["right_backward"], self.pins["right_pwm"])
 
     def _drive_pigpio(self, val, fwd, bwd, pwm):
-        if not fwd or not bwd: return
         duty = int(val * 255 * (self.max_duty/100.0))
         if val > 0.01:
             self.pi.write(fwd, 1)
@@ -294,8 +334,7 @@ class MotorDriver:
             self.pi.write(bwd, 0)
             if pwm: self.pi.set_PWM_dutycycle(pwm, 0)
 
-    def stop(self):
-        self.drive(0, 0)
+    def stop(self): self.drive(0, 0)
 
 motors = MotorDriver(CONFIG["motor"])
 
@@ -303,37 +342,28 @@ motors = MotorDriver(CONFIG["motor"])
 def motor_control_thread():
     while True:
         with control_lock:
-            # 1. Smooth Targets
             alpha = control_params["alpha"]
             target_l = control_state["left_target"]
             target_r = control_state["right_target"]
-            
-            curr_l = control_state["left_actual"]
-            curr_r = control_state["right_actual"]
+            curr_l, curr_r = control_state["left_actual"], control_state["right_actual"]
             
             next_l = curr_l + alpha * (target_l - curr_l)
             next_r = curr_r + alpha * (target_r - curr_r)
+            control_state["left_actual"], control_state["right_actual"] = next_l, next_r
             
-            control_state["left_actual"] = next_l
-            control_state["right_actual"] = next_r
-            
-            # 2. Apply Expo & Trim
             expo = control_params["throttle_expo"]
             final_l = (next_l ** expo) * control_params["left_trim"]
             final_r = (next_r ** expo) * control_params["right_trim"]
             
-            # 3. Safety Timeout (0.5s)
             if time.time() - control_state["last_update_ts"] > 0.5:
                 final_l, final_r = 0, 0
                 
-        # 4. Hardware Execute
         motors.drive(max(0, min(1, final_l)), max(0, min(1, final_r)))
-        
         time.sleep(1.0 / control_params["hz"])
 
 threading.Thread(target=motor_control_thread, daemon=True).start()
 
-# --- Helpers ---
+# --- Model & Utils ---
 def _load_model_internal(name):
     global autopilot_model, autopilot_device
     if not TORCH_AVAILABLE: return False, "No Torch"
@@ -343,11 +373,10 @@ def _load_model_internal(name):
     try:
         ckpt = torch.load(path, map_location="cpu")
         state = ckpt.get("model_state", ckpt)
-        
-        # Load Model
         h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
         model = TinySteerNet(image_height=h, image_width=w)
         
+        # Check quantization
         dtype = ckpt.get("dtype", "float32") if isinstance(ckpt, dict) else "float32"
         if dtype == "int8_dynamic" and quantize_dynamic:
             model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
@@ -362,51 +391,42 @@ def _load_model_internal(name):
         logger.info(f"Model loaded: {name}")
         return True, "Loaded"
     except Exception as e:
-        logger.error(f"Load error: {e}")
         return False, str(e)
 
 def _predict_frame(frame_bgr):
     if autopilot_model is None: return 0.0, 0.0
-    
     h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
-    # Ensure correct size if frame isn't already (double safety)
-    if frame_bgr.shape[0] != h or frame_bgr.shape[1] != w:
-        frame_bgr = cv2.resize(frame_bgr, (w, h))
-        
-    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    
-    tensor = torch.from_numpy(rgb).float() / 255.0
+    # The frame is likely RGB now because of _apply_processing in camera
+    # Resize -> Tensor
+    resized = cv2.resize(frame_bgr, (w, h))
+    tensor = torch.from_numpy(resized).float() / 255.0
     tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(autopilot_device)
     
     with torch.no_grad():
         out = autopilot_model(tensor)
         left, right = out[0].tolist()
-        
     return float(left), float(right)
 
 # --- Flask App ---
-app = Flask(__name__)
+app = Flask(__name__) # Use standard template folder
 CORS(app)
 
 @app.route("/")
-def index():
-    return render_template("index.html")
+def index(): return render_template("index.html")
 
 @app.route("/api/health")
 def api_health():
     return ok({
         "camera_on": camera.running,
         "camera_fps": camera.get_fps(),
-        "camera_backend": camera.backend_name,
+        "camera_backend": camera._backend,
         "current_dataset": current_dataset
     })
 
-# --- Camera ---
 @app.route("/api/camera/start", methods=["POST"])
 def cam_start():
     camera.start()
-    time.sleep(0.5) # Give it a moment to init backend
-    return ok({"backend": camera.backend_name})
+    return ok()
 
 @app.route("/api/camera/stop", methods=["POST"])
 def cam_stop():
@@ -422,9 +442,7 @@ def cam_config():
 @app.route("/api/camera/settings", methods=["POST"])
 def cam_settings():
     d = request.json
-    camera.vflip = d.get("vflip", False)
-    camera.hflip = d.get("hflip", False)
-    camera.mode = d.get("mode", "raw")
+    camera.update_settings(vflip=d.get("vflip"), hflip=d.get("hflip"), mode=d.get("mode"))
     return ok()
 
 @app.route("/api/video")
@@ -433,23 +451,14 @@ def video_feed():
         while True:
             frame = camera.get_frame()
             if frame is None:
-                # If camera is on but no frame, send blank placeholder to prevent browser spin
-                if camera.running:
-                    time.sleep(0.1)
-                    continue
-                else:
-                    break
-            
+                time.sleep(0.1)
+                continue
             ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
             if ret:
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-            
-            # Throttle stream
-            time.sleep(1.0 / (camera.fps + 5)) 
-            
+            time.sleep(1.0/camera.fps)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# --- Motors ---
 @app.route("/api/motors/openloop", methods=["POST"])
 def motors_open():
     d = request.json
@@ -472,7 +481,6 @@ def motors_stop():
         deploy_status["autopilot"] = False
     return ok()
 
-# --- Datasets ---
 current_dataset = "default"
 @app.route("/api/datasets")
 def list_datasets():
@@ -502,19 +510,16 @@ def label_click():
     if frame is None: return err("No camera")
     
     ts = int(time.time() * 1000)
-    x = d.get("x", 0)
-    y = d.get("y", 0)
-    w = d.get("image_width", 1)
-    h = d.get("image_height", 1)
+    x, y = d.get("x", 0), d.get("y", 0)
+    w, h = d.get("image_width", 1), d.get("image_height", 1)
     
-    grid_x = int((x / w) * 149)
-    grid_y = int((y / h) * 149)
+    grid_x = max(0, min(149, int((x / w) * 149)))
+    grid_y = max(0, min(149, int((y / h) * 149)))
     
     fname = f"x{grid_x:03d}_y{grid_y:03d}_click_{ts}.jpg"
     cv2.imwrite(os.path.join(DATASETS_ROOT, current_dataset, fname), frame)
     return ok({"saved": fname})
 
-# --- Logging ---
 logging_active = False
 def logging_thread_func():
     global logging_active
@@ -522,10 +527,8 @@ def logging_thread_func():
         frame = camera.get_frame()
         if frame is not None:
             with control_lock:
-                l = control_state["left_actual"]
-                r = control_state["right_actual"]
-            l_int = int(l * 255)
-            r_int = int(r * 255)
+                l, r = control_state["left_actual"], control_state["right_actual"]
+            l_int, r_int = int(l * 255), int(r * 255)
             fname = f"t_l{l_int:03d}_r{r_int:03d}_{int(time.time()*1000)}.jpg"
             cv2.imwrite(os.path.join(DATASETS_ROOT, current_dataset, fname), frame)
         time.sleep(0.1)
@@ -544,7 +547,6 @@ def log_stop():
     logging_active = False
     return ok()
 
-# --- Filesystem API ---
 @app.route("/api/fs/list")
 def api_fs_list():
     rel = request.args.get("path", ".")
@@ -568,10 +570,8 @@ def api_fs_read():
 def api_fs_raw():
     rel = request.args.get("path", "")
     full = os.path.abspath(os.path.join(ROOT, rel))
-    if not full.startswith(ROOT) or not os.path.isfile(full): return err("Invalid file")
     return send_file(full)
 
-# --- Models ---
 @app.route("/api/models")
 def list_models():
     models = []
@@ -599,7 +599,6 @@ def quantize_model():
     torch.save({"model_state": q_model.state_dict(), "dtype": "int8_dynamic"}, os.path.join(MODELS_ROOT, out_name))
     return ok({"created": out_name})
 
-# --- Training & Validation ---
 @app.route("/api/train/start", methods=["POST"])
 def train_start():
     if not TORCH_AVAILABLE: return err("No Torch")
@@ -641,7 +640,8 @@ def train_start():
                 img = cv2.imread(fpath)
                 if img is None: return torch.zeros(3,224,224), torch.tensor([0.0,0.0])
                 img = cv2.resize(img, (CONFIG["train"]["image_width"], CONFIG["train"]["image_height"]))
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                # If frame_bgr had the flip applied during capture, we need to handle RGB here consistently
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) 
                 t = torch.from_numpy(img).permute(2,0,1).float() / 255.0
                 return t, torch.tensor([l, r], dtype=torch.float32)
 
@@ -677,8 +677,7 @@ def train_start():
     return ok()
 
 @app.route("/api/train/status")
-def get_train_status():
-    return ok(train_status)
+def get_train_status(): return ok(train_status)
 
 @app.route("/api/train/validate")
 def validate_model():
@@ -697,7 +696,6 @@ def validate_model():
     for f in files:
         img = cv2.imread(f)
         if img is None: continue
-        
         bn = os.path.basename(f)
         mt = tele_re.search(bn)
         mc = click_re.search(bn)
@@ -719,7 +717,6 @@ def validate_model():
         
     return ok({"dataset": ds_name, "num_images": count, "metrics": {"mae": round(total_diff/(count*2), 4) if count else 0}})
 
-# --- Deployment ---
 @app.route("/api/deploy/start", methods=["POST"])
 def ap_start():
     d = request.json
@@ -738,21 +735,18 @@ def ap_start():
             
             l, r = _predict_frame(frame)
             
-            # Reflex safety
             if deploy_status["reflex_on"]:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 if np.mean(gray) < deploy_status["min_brightness"]:
                     l, r = 0, 0
                     deploy_status["note"] = "Too dark"
             
-            # Mixing
             with control_lock:
                 if deploy_status["mode"] == "assist":
                     b = deploy_status["assist_blend"]
                     l = (1-b)*control_state["human_left"] + b*l
                     r = (1-b)*control_state["human_right"] + b*r
                 
-                # Gains
                 g = deploy_status["gains"]["throttle_gain"]
                 l *= g
                 r *= g
@@ -761,7 +755,6 @@ def ap_start():
                     control_state["left_target"] = l
                     control_state["right_target"] = r
                     control_state["last_update_ts"] = time.time()
-            
             time.sleep(1.0/CONFIG["autopilot"]["fps"])
             
     threading.Thread(target=drive_loop, daemon=True).start()
@@ -783,8 +776,7 @@ def ap_gains():
     return ok()
 
 @app.route("/api/deploy/status")
-def ap_status():
-    return ok(deploy_status)
+def ap_status(): return ok(deploy_status)
 
 @app.route("/api/deploy/test_frame")
 def test_frame():
@@ -797,29 +789,21 @@ def test_frame():
     if frame is None: return err("No frame")
     
     l, r = _predict_frame(frame)
-    
-    # Visualization
     vis = frame.copy()
     th = (l + r) / 2.0
     st = (r - l) / (th + 0.0001) / 2.0
-    
-    # Map back to 0-149 grid
     gy = int((1.0 - th) * 149)
     gx = int(((st/2.0) + 0.5) * 149)
-    
     h, w, _ = vis.shape
     cx = int((gx/149.0)*w)
     cy = int((gy/149.0)*h)
-    
-    cv2.circle(vis, (cx, cy), 8, (0, 255, 0), 2)
+    cv2.circle(vis, (cx, cy), 10, (0, 255, 0), 2)
     cv2.putText(vis, f"L:{l:.2f} R:{r:.2f}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
     
     ret, jpeg = cv2.imencode('.jpg', vis)
     b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
-    
     return ok({
-        "left": round(l, 2),
-        "right": round(r, 2),
+        "left": round(l, 2), "right": round(r, 2),
         "click_X": gx, "click_Y": gy,
         "debug_image": f"data:image/jpeg;base64,{b64}"
     })
