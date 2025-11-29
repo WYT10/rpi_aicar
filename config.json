@@ -4,21 +4,21 @@
     "port": 8888
   },
   "camera": {
-    "width": 320,
-    "height": 240,
+    "width": 224,
+    "height": 224,
     "fps": 15
   },
   "motor": {
     "pins": {
-      "left_forward": 17,
-      "left_backward": 27,
-      "right_forward": 22,
-      "right_backward": 23,
+      "left_forward": 5,
+      "left_backward": 6,
+      "right_forward": 20,
+      "right_backward": 21,
       "left_pwm": null,
       "right_pwm": null,
       "stby": null
     },
-    "invert_left": true,
+    "invert_left": false,
     "invert_right": false,
     "pwm_freq": 1500,
     "max_duty_pct": 90,
@@ -29,21 +29,19 @@
     "datasets_root": "data/datasets",
     "models_root": "data/models"
   },
-  "joystick": {
-    "max_speed": 0.5,
-    "max_rot": 0.8,
-    "speed_gain": 1.0,
-    "steer_gain": 1.0
-  },
   "train": {
-    "image_width": 96,
-    "image_height": 64,
+    "image_width": 224,
+    "image_height": 224,
     "default_epochs": 10,
     "default_batch_size": 32,
     "default_learning_rate": 0.001
   },
   "autopilot": {
     "default_model": "aicar_latest.pt",
-    "fps": 20
+    "fps": 20,
+    "default_mode": "assist",
+    "default_assist_blend": 0.7,
+    "reflex_on": true,
+    "min_brightness": 18.0
   }
 }
