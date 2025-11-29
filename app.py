@@ -12,17 +12,16 @@ from collections import deque
 
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request, Response, render_template
+from flask import Flask, jsonify, request, Response, render_template, send_file
 from flask_cors import CORS
 
-# --- Torch / ML Imports ---
+# --- Torch Imports ---
 try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
     from torch.utils.data import Dataset, DataLoader
     from torch.quantization import quantize_dynamic
-    from PIL import Image
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
@@ -32,9 +31,8 @@ except ImportError:
     Dataset = object
     DataLoader = None
     quantize_dynamic = None
-    Image = None
 
-# --- Configuration & Setup ---
+# --- Config & Init ---
 ROOT = os.path.abspath(os.path.dirname(__file__))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 
@@ -106,7 +104,6 @@ if TORCH_AVAILABLE:
                 nn.Conv2d(16, 32, 5, stride=2, padding=2), nn.ReLU(inplace=True),
                 nn.Conv2d(32, 48, 3, stride=2, padding=1), nn.ReLU(inplace=True),
             )
-            # Dynamic flatten size calculation
             with torch.no_grad():
                 dummy = torch.zeros(1, 3, image_height, image_width)
                 out = self.conv(dummy)
@@ -128,76 +125,101 @@ else:
     TinySteerNet = None
     autopilot_model = None
 
-# --- Camera Manager ---
+# --- Robust Camera Manager ---
 class CameraManager:
     def __init__(self, cfg):
         self.width = cfg["width"]
         self.height = cfg["height"]
         self.fps = cfg["fps"]
-        self.frame = None
         self.lock = threading.Lock()
         self.running = False
+        self.frame = None
         self.vflip = False
         self.hflip = False
         self.mode = "raw"
+        self.backend_name = "none"
+        self.thread = None
 
     def start(self):
         if self.running: return
         self.running = True
-        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
     def stop(self):
         self.running = False
-        if hasattr(self, 'thread'): self.thread.join(timeout=1.0)
+        if self.thread: self.thread.join(timeout=1.0)
+        self.backend_name = "none"
 
-    def _loop(self):
-        # 1. Picamera2
+    def _run(self):
+        # 1. Try V4L2 (OpenCV) - Most Robust
+        cap = cv2.VideoCapture(0)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            cap.set(cv2.CAP_PROP_FPS, self.fps)
+            
+            # Verify we can actually read a frame
+            ret, _ = cap.read()
+            if ret:
+                self.backend_name = "opencv-v4l2"
+                logger.info("Camera: Started (OpenCV V4L2)")
+                while self.running:
+                    ret, frame = cap.read()
+                    if not ret:
+                        time.sleep(0.1)
+                        continue
+                    self._process(frame)
+                cap.release()
+                return
+            cap.release()
+
+        # 2. Try Picamera2 (If available and V4L2 failed/busy)
         try:
             from picamera2 import Picamera2
-            cam = Picamera2()
-            config = cam.create_preview_configuration(main={"size": (self.width, self.height), "format": "BGR888"})
-            cam.configure(config)
-            cam.start()
-            logger.info("Camera: using Picamera2")
+            picam = Picamera2()
+            config = picam.create_preview_configuration(main={"size": (self.width, self.height), "format": "BGR888"})
+            picam.configure(config)
+            picam.start()
+            self.backend_name = "picamera2"
+            logger.info("Camera: Started (Picamera2)")
+            
             while self.running:
-                raw = cam.capture_array("main")
-                self._process_and_store(raw)
-            cam.stop()
-            cam.close()
+                frame = picam.capture_array("main")
+                self._process(frame)
+            
+            picam.stop()
+            picam.close()
             return
-        except ImportError: pass
-        except Exception as e: logger.warning(f"Picamera2 failed: {e}")
+        except Exception as e:
+            logger.warning(f"Camera: Picamera2 failed: {e}")
 
-        # 2. OpenCV V4L2
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
-        logger.info("Camera: using OpenCV VideoCapture(0)")
-        
+        # 3. Fallback: Mock (Static noise if no HW found)
+        self.backend_name = "mock-noise"
+        logger.warning("Camera: No hardware found, starting Mock backend")
         while self.running:
-            ret, raw = cap.read()
-            if not ret:
-                time.sleep(0.1)
-                continue
-            self._process_and_store(raw)
-        cap.release()
+            noise = np.random.randint(0, 255, (self.height, self.width, 3), dtype=np.uint8)
+            cv2.putText(noise, "NO CAMERA", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+            self._process(noise)
+            time.sleep(1.0/self.fps)
 
-    def _process_and_store(self, frame_bgr):
-        # Convert Camera Source (usually BGR) to Processing Source (BGR)
-        # Note: If colors look blue/red swapped, toggle this line:
-        # frame_bgr = frame_bgr[:, :, ::-1] 
-        
+    def _process(self, frame_bgr):
+        # Resize first to ensure consistent dimension (if hw returned weird size)
+        if frame_bgr.shape[0] != self.height or frame_bgr.shape[1] != self.width:
+            frame_bgr = cv2.resize(frame_bgr, (self.width, self.height))
+
+        # Flips
         if self.vflip: frame_bgr = cv2.flip(frame_bgr, 0)
         if self.hflip: frame_bgr = cv2.flip(frame_bgr, 1)
         
-        # Mode processing
+        # Proc modes
         if self.mode == "gray":
-            frame_bgr = cv2.cvtColor(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            frame_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         elif self.mode == "edges":
             gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-            frame_bgr = cv2.cvtColor(cv2.Canny(gray, 50, 150), cv2.COLOR_GRAY2BGR)
+            edges = cv2.Canny(gray, 50, 150)
+            frame_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
         with self.lock:
             self.frame = frame_bgr
@@ -222,17 +244,21 @@ class MotorDriver:
             self.pi = pigpio.pi()
             if self.pi.connected:
                 self.backend = "pigpio"
-                for p in [self.pins["left_forward"], self.pins["left_backward"], self.pins["right_forward"], self.pins["right_backward"]]:
-                    self.pi.set_mode(p, pigpio.OUTPUT)
-                if self.pins["left_pwm"]: 
-                    self.pi.set_mode(self.pins["left_pwm"], pigpio.OUTPUT)
-                    self.pi.set_PWM_frequency(self.pins["left_pwm"], cfg["pwm_freq"])
-                if self.pins["right_pwm"]: 
-                    self.pi.set_mode(self.pins["right_pwm"], pigpio.OUTPUT)
-                    self.pi.set_PWM_frequency(self.pins["right_pwm"], cfg["pwm_freq"])
-                if self.pins["stby"]:
-                    self.pi.set_mode(self.pins["stby"], pigpio.OUTPUT)
-                    self.pi.write(self.pins["stby"], 1)
+                pins = [self.pins.get(k) for k in ["left_forward", "left_backward", "right_forward", "right_backward"]]
+                for p in pins: 
+                    if p: self.pi.set_mode(p, pigpio.OUTPUT)
+                
+                pwm_pins = [self.pins.get("left_pwm"), self.pins.get("right_pwm")]
+                for p in pwm_pins:
+                    if p: 
+                        self.pi.set_mode(p, pigpio.OUTPUT)
+                        self.pi.set_PWM_frequency(p, cfg["pwm_freq"])
+                
+                stby = self.pins.get("stby")
+                if stby:
+                    self.pi.set_mode(stby, pigpio.OUTPUT)
+                    self.pi.write(stby, 1)
+                
                 logger.info("Motors: Pigpio connected")
                 return
         except ImportError: pass
@@ -244,22 +270,20 @@ class MotorDriver:
             GPIO.setwarnings(False)
             self.GPIO = GPIO
             self.backend = "gpio"
-            self.lpwm = None
-            self.rpwm = None
-            # Standard setup...
-            logger.info("Motors: RPi.GPIO connected")
+            # Basic pin init logic would go here if needed...
+            logger.info("Motors: RPi.GPIO (Mock/Active) connected")
             return
         except: pass
         
         logger.info("Motors: Dummy mode")
 
     def drive(self, left, right):
-        # Input: 0.0 to 1.0
         if self.backend == "pigpio":
-            self._drive_pigpio(left, self.pins["left_forward"], self.pins["left_backward"], self.pins["left_pwm"])
-            self._drive_pigpio(right, self.pins["right_forward"], self.pins["right_backward"], self.pins["right_pwm"])
+            self._drive_pigpio(left, self.pins.get("left_forward"), self.pins.get("left_backward"), self.pins.get("left_pwm"))
+            self._drive_pigpio(right, self.pins.get("right_forward"), self.pins.get("right_backward"), self.pins.get("right_pwm"))
 
     def _drive_pigpio(self, val, fwd, bwd, pwm):
+        if not fwd or not bwd: return
         duty = int(val * 255 * (self.max_duty/100.0))
         if val > 0.01:
             self.pi.write(fwd, 1)
@@ -279,6 +303,7 @@ motors = MotorDriver(CONFIG["motor"])
 def motor_control_thread():
     while True:
         with control_lock:
+            # 1. Smooth Targets
             alpha = control_params["alpha"]
             target_l = control_state["left_target"]
             target_r = control_state["right_target"]
@@ -292,14 +317,18 @@ def motor_control_thread():
             control_state["left_actual"] = next_l
             control_state["right_actual"] = next_r
             
+            # 2. Apply Expo & Trim
             expo = control_params["throttle_expo"]
             final_l = (next_l ** expo) * control_params["left_trim"]
             final_r = (next_r ** expo) * control_params["right_trim"]
             
+            # 3. Safety Timeout (0.5s)
             if time.time() - control_state["last_update_ts"] > 0.5:
                 final_l, final_r = 0, 0
                 
+        # 4. Hardware Execute
         motors.drive(max(0, min(1, final_l)), max(0, min(1, final_r)))
+        
         time.sleep(1.0 / control_params["hz"])
 
 threading.Thread(target=motor_control_thread, daemon=True).start()
@@ -319,7 +348,6 @@ def _load_model_internal(name):
         h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
         model = TinySteerNet(image_height=h, image_width=w)
         
-        # Check Quantization
         dtype = ckpt.get("dtype", "float32") if isinstance(ckpt, dict) else "float32"
         if dtype == "int8_dynamic" and quantize_dynamic:
             model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
@@ -341,8 +369,11 @@ def _predict_frame(frame_bgr):
     if autopilot_model is None: return 0.0, 0.0
     
     h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
-    resized = cv2.resize(frame_bgr, (w, h))
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    # Ensure correct size if frame isn't already (double safety)
+    if frame_bgr.shape[0] != h or frame_bgr.shape[1] != w:
+        frame_bgr = cv2.resize(frame_bgr, (w, h))
+        
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     
     tensor = torch.from_numpy(rgb).float() / 255.0
     tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(autopilot_device)
@@ -354,7 +385,6 @@ def _predict_frame(frame_bgr):
     return float(left), float(right)
 
 # --- Flask App ---
-# Use standard Flask template behavior (looks in ./templates/)
 app = Flask(__name__)
 CORS(app)
 
@@ -366,8 +396,8 @@ def index():
 def api_health():
     return ok({
         "camera_on": camera.running,
-        "camera_fps": camera.get_fps() if hasattr(camera, 'get_fps') else CONFIG["camera"]["fps"], 
-        "camera_backend": "active" if camera.running else "none",
+        "camera_fps": camera.get_fps(),
+        "camera_backend": camera.backend_name,
         "current_dataset": current_dataset
     })
 
@@ -375,7 +405,8 @@ def api_health():
 @app.route("/api/camera/start", methods=["POST"])
 def cam_start():
     camera.start()
-    return ok()
+    time.sleep(0.5) # Give it a moment to init backend
+    return ok({"backend": camera.backend_name})
 
 @app.route("/api/camera/stop", methods=["POST"])
 def cam_stop():
@@ -402,12 +433,20 @@ def video_feed():
         while True:
             frame = camera.get_frame()
             if frame is None:
-                time.sleep(0.1)
-                continue
+                # If camera is on but no frame, send blank placeholder to prevent browser spin
+                if camera.running:
+                    time.sleep(0.1)
+                    continue
+                else:
+                    break
+            
             ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
             if ret:
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-            time.sleep(1.0/camera.fps)
+            
+            # Throttle stream
+            time.sleep(1.0 / (camera.fps + 5)) 
+            
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # --- Motors ---
@@ -463,7 +502,6 @@ def label_click():
     if frame is None: return err("No camera")
     
     ts = int(time.time() * 1000)
-    # Calculate grid X,Y (0-149)
     x = d.get("x", 0)
     y = d.get("y", 0)
     w = d.get("image_width", 1)
@@ -530,6 +568,7 @@ def api_fs_read():
 def api_fs_raw():
     rel = request.args.get("path", "")
     full = os.path.abspath(os.path.join(ROOT, rel))
+    if not full.startswith(ROOT) or not os.path.isfile(full): return err("Invalid file")
     return send_file(full)
 
 # --- Models ---
@@ -749,7 +788,6 @@ def ap_status():
 
 @app.route("/api/deploy/test_frame")
 def test_frame():
-    # Load requested model or verify loaded
     target_model = request.args.get("model")
     if target_model and target_model != deploy_status["model"]:
         _load_model_internal(target_model)
