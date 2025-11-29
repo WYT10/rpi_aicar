@@ -12,7 +12,7 @@ from collections import deque
 
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request, Response, render_template, send_file
+from flask import Flask, jsonify, request, Response, render_template
 from flask_cors import CORS
 
 # --- Torch / ML Imports ---
@@ -50,7 +50,6 @@ def load_config():
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r") as f:
             user_cfg = json.load(f)
-            # Simple recursive update could go here, but simplistic override is fine
             defaults.update(user_cfg)
     else:
         with open(CONFIG_PATH, "w") as f:
@@ -162,8 +161,7 @@ class CameraManager:
             cam.start()
             logger.info("Camera: using Picamera2")
             while self.running:
-                # Picamera2 returns BGR natively
-                raw = cam.capture_array("main") 
+                raw = cam.capture_array("main")
                 self._process_and_store(raw)
             cam.stop()
             cam.close()
@@ -171,7 +169,7 @@ class CameraManager:
         except ImportError: pass
         except Exception as e: logger.warning(f"Picamera2 failed: {e}")
 
-        # 2. OpenCV V4L2 / GStreamer fallback
+        # 2. OpenCV V4L2
         cap = cv2.VideoCapture(0)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
@@ -183,12 +181,14 @@ class CameraManager:
             if not ret:
                 time.sleep(0.1)
                 continue
-            # OpenCV returns BGR natively
             self._process_and_store(raw)
         cap.release()
 
     def _process_and_store(self, frame_bgr):
-        # Processing expects BGR, returns BGR
+        # Convert Camera Source (usually BGR) to Processing Source (BGR)
+        # Note: If colors look blue/red swapped, toggle this line:
+        # frame_bgr = frame_bgr[:, :, ::-1] 
+        
         if self.vflip: frame_bgr = cv2.flip(frame_bgr, 0)
         if self.hflip: frame_bgr = cv2.flip(frame_bgr, 1)
         
@@ -246,7 +246,7 @@ class MotorDriver:
             self.backend = "gpio"
             self.lpwm = None
             self.rpwm = None
-            # Setup pins... (Simplified for brevity, standard H-Bridge logic)
+            # Standard setup...
             logger.info("Motors: RPi.GPIO connected")
             return
         except: pass
@@ -258,7 +258,6 @@ class MotorDriver:
         if self.backend == "pigpio":
             self._drive_pigpio(left, self.pins["left_forward"], self.pins["left_backward"], self.pins["left_pwm"])
             self._drive_pigpio(right, self.pins["right_forward"], self.pins["right_backward"], self.pins["right_pwm"])
-        # (RPi.GPIO implementation would go here)
 
     def _drive_pigpio(self, val, fwd, bwd, pwm):
         duty = int(val * 255 * (self.max_duty/100.0))
@@ -280,12 +279,10 @@ motors = MotorDriver(CONFIG["motor"])
 def motor_control_thread():
     while True:
         with control_lock:
-            # 1. Smooth Targets
             alpha = control_params["alpha"]
             target_l = control_state["left_target"]
             target_r = control_state["right_target"]
             
-            # Simple exponential moving average
             curr_l = control_state["left_actual"]
             curr_r = control_state["right_actual"]
             
@@ -295,18 +292,14 @@ def motor_control_thread():
             control_state["left_actual"] = next_l
             control_state["right_actual"] = next_r
             
-            # 2. Apply Expo & Trim
             expo = control_params["throttle_expo"]
             final_l = (next_l ** expo) * control_params["left_trim"]
             final_r = (next_r ** expo) * control_params["right_trim"]
             
-            # 3. Safety Timeout (0.5s)
             if time.time() - control_state["last_update_ts"] > 0.5:
                 final_l, final_r = 0, 0
                 
-        # 4. Hardware Execute
         motors.drive(max(0, min(1, final_l)), max(0, min(1, final_r)))
-        
         time.sleep(1.0 / control_params["hz"])
 
 threading.Thread(target=motor_control_thread, daemon=True).start()
@@ -320,12 +313,13 @@ def _load_model_internal(name):
     
     try:
         ckpt = torch.load(path, map_location="cpu")
-        state = ckpt.get("model_state", ckpt) # Handle legacy saves
+        state = ckpt.get("model_state", ckpt)
         
-        # Create model structure
-        model = TinySteerNet(image_height=CONFIG["train"]["image_height"], image_width=CONFIG["train"]["image_width"])
+        # Load Model
+        h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
+        model = TinySteerNet(image_height=h, image_width=w)
         
-        # Check for quantization
+        # Check Quantization
         dtype = ckpt.get("dtype", "float32") if isinstance(ckpt, dict) else "float32"
         if dtype == "int8_dynamic" and quantize_dynamic:
             model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
@@ -337,17 +331,13 @@ def _load_model_internal(name):
         model.to(autopilot_device)
         autopilot_model = model
         deploy_status["model"] = name
+        logger.info(f"Model loaded: {name}")
         return True, "Loaded"
     except Exception as e:
         logger.error(f"Load error: {e}")
         return False, str(e)
 
 def _predict_frame(frame_bgr):
-    # PRE-PROCESSING PIPELINE:
-    # 1. Resize to Config Dimension
-    # 2. BGR -> RGB
-    # 3. Normalize 0-1
-    # 4. CHW Layout
     if autopilot_model is None: return 0.0, 0.0
     
     h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
@@ -364,7 +354,8 @@ def _predict_frame(frame_bgr):
     return float(left), float(right)
 
 # --- Flask App ---
-app = Flask(__name__, template_folder=".")
+# Use standard Flask template behavior (looks in ./templates/)
+app = Flask(__name__)
 CORS(app)
 
 @app.route("/")
@@ -375,11 +366,12 @@ def index():
 def api_health():
     return ok({
         "camera_on": camera.running,
-        "camera_backend": camera._backend if camera.running else "none",
-        "cpu_temp": 0 # Placeholder
+        "camera_fps": camera.get_fps() if hasattr(camera, 'get_fps') else CONFIG["camera"]["fps"], 
+        "camera_backend": "active" if camera.running else "none",
+        "current_dataset": current_dataset
     })
 
-# --- Camera Routes ---
+# --- Camera ---
 @app.route("/api/camera/start", methods=["POST"])
 def cam_start():
     camera.start()
@@ -394,7 +386,6 @@ def cam_stop():
 def cam_config():
     data = request.json
     camera.fps = int(data.get("fps", 20))
-    # Restart to apply FPS changes if needed in future
     return ok()
 
 @app.route("/api/camera/settings", methods=["POST"])
@@ -413,22 +404,19 @@ def video_feed():
             if frame is None:
                 time.sleep(0.1)
                 continue
-            # Encode BGR -> JPEG for Browser
             ret, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
             if ret:
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
             time.sleep(1.0/camera.fps)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# --- Motor/Control Routes ---
+# --- Motors ---
 @app.route("/api/motors/openloop", methods=["POST"])
 def motors_open():
     d = request.json
     with control_lock:
         control_state["human_left"] = float(d.get("left", 0))
         control_state["human_right"] = float(d.get("right", 0))
-        
-        # If not autopilot, pass through immediately
         if not deploy_status["autopilot"]:
             control_state["left_target"] = control_state["human_left"]
             control_state["right_target"] = control_state["human_right"]
@@ -442,16 +430,11 @@ def motors_stop():
         control_state["right_target"] = 0
         control_state["human_left"] = 0
         control_state["human_right"] = 0
-        deploy_status["autopilot"] = False # Safety kill
+        deploy_status["autopilot"] = False
     return ok()
 
-@app.route("/api/control/params", methods=["POST"])
-def set_params():
-    d = request.json
-    control_params.update(d)
-    return ok()
-
-# --- Dataset Routes ---
+# --- Datasets ---
+current_dataset = "default"
 @app.route("/api/datasets")
 def list_datasets():
     ds = [d for d in os.listdir(DATASETS_ROOT) if os.path.isdir(os.path.join(DATASETS_ROOT, d))]
@@ -479,24 +462,21 @@ def label_click():
     frame = camera.get_frame()
     if frame is None: return err("No camera")
     
-    # Save Image
     ts = int(time.time() * 1000)
     # Calculate grid X,Y (0-149)
-    x_click = d.get("x", 0)
-    y_click = d.get("y", 0)
-    width = d.get("image_width", 1)
-    height = d.get("image_height", 1)
+    x = d.get("x", 0)
+    y = d.get("y", 0)
+    w = d.get("image_width", 1)
+    h = d.get("image_height", 1)
     
-    grid_x = int((x_click / width) * 149)
-    grid_y = int((y_click / height) * 149)
-    grid_x = max(0, min(149, grid_x))
-    grid_y = max(0, min(149, grid_y))
+    grid_x = int((x / w) * 149)
+    grid_y = int((y / h) * 149)
     
     fname = f"x{grid_x:03d}_y{grid_y:03d}_click_{ts}.jpg"
     cv2.imwrite(os.path.join(DATASETS_ROOT, current_dataset, fname), frame)
     return ok({"saved": fname})
 
-# --- Logging (Teleop) ---
+# --- Logging ---
 logging_active = False
 def logging_thread_func():
     global logging_active
@@ -506,14 +486,11 @@ def logging_thread_func():
             with control_lock:
                 l = control_state["left_actual"]
                 r = control_state["right_actual"]
-            
-            # Map 0.0-1.0 to 0-255 for filename
             l_int = int(l * 255)
             r_int = int(r * 255)
             fname = f"t_l{l_int:03d}_r{r_int:03d}_{int(time.time()*1000)}.jpg"
             cv2.imwrite(os.path.join(DATASETS_ROOT, current_dataset, fname), frame)
-        
-        time.sleep(1.0 / 10.0) # 10 Hz logging
+        time.sleep(0.1)
 
 @app.route("/api/log/start", methods=["POST"])
 def log_start():
@@ -529,7 +506,33 @@ def log_stop():
     logging_active = False
     return ok()
 
-# --- Models & Training ---
+# --- Filesystem API ---
+@app.route("/api/fs/list")
+def api_fs_list():
+    rel = request.args.get("path", ".")
+    base = os.path.abspath(os.path.join(ROOT, rel))
+    if not base.startswith(ROOT) or not os.path.exists(base): return err("Invalid path")
+    entries = []
+    for name in sorted(os.listdir(base)):
+        full = os.path.join(base, name)
+        entries.append({"name": name, "is_dir": os.path.isdir(full), "size": os.stat(full).st_size})
+    return ok({"entries": entries})
+
+@app.route("/api/fs/read")
+def api_fs_read():
+    rel = request.args.get("path", "")
+    full = os.path.abspath(os.path.join(ROOT, rel))
+    if not full.startswith(ROOT) or not os.path.isfile(full): return err("Invalid file")
+    with open(full, "r") as f: content = f.read()
+    return ok({"content": content})
+
+@app.route("/api/fs/raw")
+def api_fs_raw():
+    rel = request.args.get("path", "")
+    full = os.path.abspath(os.path.join(ROOT, rel))
+    return send_file(full)
+
+# --- Models ---
 @app.route("/api/models")
 def list_models():
     models = []
@@ -543,26 +546,21 @@ def list_models():
 def quantize_model():
     if not TORCH_AVAILABLE: return err("Torch required")
     src = request.json.get("source")
-    if not src: return err("No source")
-    
     path = os.path.join(MODELS_ROOT, src)
     if not os.path.exists(path): return err("Missing file")
     
-    # Load FP32
-    model = TinySteerNet(CONFIG["train"]["image_height"], CONFIG["train"]["image_width"])
+    h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
+    model = TinySteerNet(h, w)
     ckpt = torch.load(path, map_location="cpu")
     model.load_state_dict(ckpt["model_state"] if "model_state" in ckpt else ckpt)
     model.eval()
     
-    # Quantize
     q_model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
-    
-    # Save
     out_name = src.replace(".pt", "_int8.pt")
     torch.save({"model_state": q_model.state_dict(), "dtype": "int8_dynamic"}, os.path.join(MODELS_ROOT, out_name))
-    
     return ok({"created": out_name})
 
+# --- Training & Validation ---
 @app.route("/api/train/start", methods=["POST"])
 def train_start():
     if not TORCH_AVAILABLE: return err("No Torch")
@@ -572,61 +570,35 @@ def train_start():
     
     def train_worker():
         train_status["running"] = True
-        train_status["dataset"] = ds_name
-        
-        # Load Data
-        images = []
-        labels = []
         path = os.path.join(DATASETS_ROOT, ds_name)
-        
         files = glob.glob(os.path.join(path, "*.jpg"))
         if not files:
             train_status["running"] = False
-            train_status["note"] = "No images found"
+            train_status["note"] = "No images"
             return
 
-        # Simple In-Memory Dataset for speed on Pi (assuming < 10k images)
-        # Parse filenames
+        valid_files = []
         click_re = re.compile(r"x(\d+)_y(\d+)_")
         tele_re = re.compile(r"t_l(\d+)_r(\d+)_")
         
-        valid_files = []
-        
-        logger.info(f"Training: Scanning {len(files)} files...")
-        
         for f in files:
             bn = os.path.basename(f)
-            l, r = 0.0, 0.0
-            
             mc = click_re.search(bn)
             mt = tele_re.search(bn)
-            
             if mc:
-                # Convert Grid X,Y to L,R
                 gx, gy = int(mc.group(1)), int(mc.group(2))
                 sx, sy = gx/149.0, gy/149.0
-                # Mapping logic:
-                # sy is position from top (0) to bottom (1). 0=Fast, 1=Stop.
                 throttle = 1.0 - sy 
-                steering = (sx - 0.5) * 2.0 # -1 to 1
-                
-                l = throttle * (1.0 - max(0, -steering)) # Simple differential
-                r = throttle * (1.0 - max(0, steering))
+                steering = (sx - 0.5) * 2.0
+                valid_files.append((f, throttle * (1.0 - max(0, -steering)), throttle * (1.0 - max(0, steering))))
             elif mt:
-                l = int(mt.group(1)) / 255.0
-                r = int(mt.group(2)) / 255.0
-            else:
-                continue
-                
-            valid_files.append((f, l, r))
+                valid_files.append((f, int(mt.group(1))/255.0, int(mt.group(2))/255.0))
 
-        # Dataset Class
         class PiDataset(Dataset):
             def __init__(self, data): self.data = data
             def __len__(self): return len(self.data)
             def __getitem__(self, idx):
                 fpath, l, r = self.data[idx]
-                # Read BGR -> RGB -> Tensor
                 img = cv2.imread(fpath)
                 if img is None: return torch.zeros(3,224,224), torch.tensor([0.0,0.0])
                 img = cv2.resize(img, (CONFIG["train"]["image_width"], CONFIG["train"]["image_height"]))
@@ -634,15 +606,11 @@ def train_start():
                 t = torch.from_numpy(img).permute(2,0,1).float() / 255.0
                 return t, torch.tensor([l, r], dtype=torch.float32)
 
-        dataset = PiDataset(valid_files)
-        loader = DataLoader(dataset, batch_size=32, shuffle=True)
-        
+        loader = DataLoader(PiDataset(valid_files), batch_size=32, shuffle=True)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model = TinySteerNet(CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]).to(device)
         opt = optim.Adam(model.parameters(), lr=0.001)
         loss_fn = nn.MSELoss()
-        
-        train_status["epochs"] = epochs
         
         for e in range(epochs):
             model.train()
@@ -656,20 +624,15 @@ def train_start():
                 opt.step()
                 total_loss += loss.item()
             
-            avg_loss = total_loss / len(loader)
             train_status["epoch"] = e + 1
-            train_status["loss"] = avg_loss
-            train_status["note"] = f"Epoch {e+1}/{epochs} Loss: {avg_loss:.4f}"
-            logger.info(train_status["note"])
+            train_status["loss"] = total_loss / len(loader)
+            train_status["note"] = f"Epoch {e+1}/{epochs}"
             
-        # Save
-        save_path = os.path.join(MODELS_ROOT, f"model_{ds_name}_{int(time.time())}.pt")
-        torch.save({"model_state": model.state_dict()}, save_path)
-        # Symlink/Copy as latest
+        ts = int(time.time())
+        torch.save({"model_state": model.state_dict()}, os.path.join(MODELS_ROOT, f"model_{ds_name}_{ts}.pt"))
         torch.save({"model_state": model.state_dict()}, os.path.join(MODELS_ROOT, "aicar_latest.pt"))
-        
         train_status["running"] = False
-        train_status["note"] = "Training Complete. Saved."
+        train_status["note"] = "Saved."
 
     threading.Thread(target=train_worker, daemon=True).start()
     return ok()
@@ -680,80 +643,53 @@ def get_train_status():
 
 @app.route("/api/train/validate")
 def validate_model():
-    if not TORCH_AVAILABLE or autopilot_model is None:
-        return err("No model loaded")
-        
+    if not TORCH_AVAILABLE or autopilot_model is None: return err("Load model first")
     ds_name = request.args.get("dataset", current_dataset)
-    # Re-use logic from training to load files... (Simplified for brevity: Assume similar parsing)
     path = os.path.join(DATASETS_ROOT, ds_name)
-    files = glob.glob(os.path.join(path, "*.jpg"))
-    if not files: return ok({"metrics": {"note": "Empty dataset"}})
+    files = glob.glob(os.path.join(path, "*.jpg"))[:200]
+    if not files: return ok({"metrics": {"note": "Empty"}})
     
-    click_re = re.compile(r"x(\d+)_y(\d+)_")
     tele_re = re.compile(r"t_l(\d+)_r(\d+)_")
+    click_re = re.compile(r"x(\d+)_y(\d+)_")
     
-    total_mae = 0
-    total_mse = 0
+    total_diff = 0
     count = 0
     
-    model = autopilot_model
-    device = autopilot_device
-    
-    # Process small batch for speed
-    for f in files[:200]: # Limit validation to 200 random images for speed on Pi
+    for f in files:
         img = cv2.imread(f)
         if img is None: continue
         
-        # Parse Truth
         bn = os.path.basename(f)
-        mc = click_re.search(bn)
         mt = tele_re.search(bn)
+        mc = click_re.search(bn)
         
-        true_l, true_r = 0.0, 0.0
-        if mc:
+        if mt:
+            tl, tr = int(mt.group(1))/255.0, int(mt.group(2))/255.0
+        elif mc:
             gx, gy = int(mc.group(1)), int(mc.group(2))
             sx, sy = gx/149.0, gy/149.0
             th = 1.0 - sy
             st = (sx - 0.5)*2.0
-            true_l = th*(1.0 - max(0, -st))
-            true_r = th*(1.0 - max(0, st))
-        elif mt:
-            true_l = int(mt.group(1))/255.0
-            true_r = int(mt.group(2))/255.0
+            tl = th * (1.0 - max(0, -st))
+            tr = th * (1.0 - max(0, st))
         else: continue
             
-        # Predict
-        # Use existing prediction pipeline (handles resizing/color)
-        pred_l, pred_r = _predict_frame(img)
-        
-        total_mae += (abs(true_l - pred_l) + abs(true_r - pred_r)) / 2.0
-        total_mse += ((true_l - pred_l)**2 + (true_r - pred_r)**2) / 2.0
+        pl, pr = _predict_frame(img)
+        total_diff += abs(tl - pl) + abs(tr - pr)
         count += 1
         
-    if count == 0: return ok({"metrics": {"note": "No valid labels"}})
-    
-    return ok({
-        "dataset": ds_name,
-        "num_images": count,
-        "metrics": {
-            "mae": round(total_mae/count, 4),
-            "mse": round(total_mse/count, 4)
-        }
-    })
+    return ok({"dataset": ds_name, "num_images": count, "metrics": {"mae": round(total_diff/(count*2), 4) if count else 0}})
 
-# --- Autopilot ---
+# --- Deployment ---
 @app.route("/api/deploy/start", methods=["POST"])
 def ap_start():
     d = request.json
-    model_name = d.get("model")
-    if model_name:
-        success, msg = _load_model_internal(model_name)
-        if not success: return err(msg)
-    elif autopilot_model is None:
-        return err("No model selected")
-        
-    deploy_status["autopilot"] = True
+    name = d.get("model")
+    if name and name != deploy_status["model"]:
+        _load_model_internal(name)
+    if autopilot_model is None: return err("No model")
     
+    deploy_status["autopilot"] = True
     def drive_loop():
         while deploy_status["autopilot"]:
             frame = camera.get_frame()
@@ -761,46 +697,30 @@ def ap_start():
                 time.sleep(0.05)
                 continue
             
-            # 1. Reflex Safety (Brightness check)
+            l, r = _predict_frame(frame)
+            
+            # Reflex safety
             if deploy_status["reflex_on"]:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 if np.mean(gray) < deploy_status["min_brightness"]:
-                    deploy_status["note"] = "Darkness stop"
-                    with control_lock:
-                        control_state["left_target"] = 0
-                        control_state["right_target"] = 0
-                        control_state["last_update_ts"] = time.time()
-                    time.sleep(0.1)
-                    continue
-                else:
-                    deploy_status["note"] = ""
-
-            # 2. Inference
-            l, r = _predict_frame(frame)
+                    l, r = 0, 0
+                    deploy_status["note"] = "Too dark"
             
-            # 3. Mixing
-            mode = deploy_status["mode"]
+            # Mixing
             with control_lock:
-                hl = control_state["human_left"]
-                hr = control_state["human_right"]
-                
-                final_l, final_r = 0, 0
-                if mode == "auto":
-                    final_l, final_r = l, r
-                elif mode == "assist":
-                    blend = deploy_status["assist_blend"]
-                    final_l = (1-blend)*hl + blend*l
-                    final_r = (1-blend)*hr + blend*r
+                if deploy_status["mode"] == "assist":
+                    b = deploy_status["assist_blend"]
+                    l = (1-b)*control_state["human_left"] + b*l
+                    r = (1-b)*control_state["human_right"] + b*r
                 
                 # Gains
-                g = deploy_status["gains"]
-                final_l *= g["throttle_gain"]
-                final_r *= g["throttle_gain"]
+                g = deploy_status["gains"]["throttle_gain"]
+                l *= g
+                r *= g
                 
-                # Apply to Control State if driving enabled
                 if deploy_status["drive_motors"]:
-                    control_state["left_target"] = final_l
-                    control_state["right_target"] = final_r
+                    control_state["left_target"] = l
+                    control_state["right_target"] = r
                     control_state["last_update_ts"] = time.time()
             
             time.sleep(1.0/CONFIG["autopilot"]["fps"])
@@ -817,8 +737,6 @@ def ap_stop():
 def ap_gains():
     d = request.json
     deploy_status["gains"]["throttle_gain"] = float(d.get("throttle_gain", 1.0))
-    deploy_status["gains"]["steering_gain"] = float(d.get("steering_gain", 1.0))
-    deploy_status["gains"]["expo"] = float(d.get("expo", 1.0))
     deploy_status["drive_motors"] = d.get("drive_motors", False)
     deploy_status["mode"] = d.get("mode", "assist")
     deploy_status["assist_blend"] = float(d.get("assist_blend", 0.7))
@@ -831,47 +749,52 @@ def ap_status():
 
 @app.route("/api/deploy/test_frame")
 def test_frame():
-    # Visual Debug Endpoint
-    if not camera.running: return err("Camera off")
-    
-    # Ensure model loaded
+    # Load requested model or verify loaded
     target_model = request.args.get("model")
     if target_model and target_model != deploy_status["model"]:
         _load_model_internal(target_model)
-    if autopilot_model is None: return err("No model loaded")
+    if autopilot_model is None: return err("No model")
     
     frame = camera.get_frame()
+    if frame is None: return err("No frame")
+    
     l, r = _predict_frame(frame)
     
-    # Calc Grid Position for visualization
-    # Reverse mapping from L/R to X/Y
-    throttle = (l+r)/2.0
-    steering = (r-l)/(throttle+0.0001)/2.0 # approx
-    
-    grid_y = int((1.0 - throttle) * 149)
-    grid_x = int(((steering/2.0) + 0.5) * 149)
-    
-    # Draw on frame
+    # Visualization
     vis = frame.copy()
+    th = (l + r) / 2.0
+    st = (r - l) / (th + 0.0001) / 2.0
+    
+    # Map back to 0-149 grid
+    gy = int((1.0 - th) * 149)
+    gx = int(((st/2.0) + 0.5) * 149)
+    
     h, w, _ = vis.shape
-    cx = int((grid_x/149.0)*w)
-    cy = int((grid_y/149.0)*h)
-    cv2.circle(vis, (cx, cy), 10, (0, 255, 0), 2) # Green Circle = Prediction
+    cx = int((gx/149.0)*w)
+    cy = int((gy/149.0)*h)
+    
+    cv2.circle(vis, (cx, cy), 8, (0, 255, 0), 2)
+    cv2.putText(vis, f"L:{l:.2f} R:{r:.2f}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
     
     ret, jpeg = cv2.imencode('.jpg', vis)
     b64 = base64.b64encode(jpeg.tobytes()).decode('utf-8')
     
     return ok({
-        "click_X": grid_x,
-        "click_Y": grid_y,
-        "left": round(l,3),
-        "right": round(r,3),
+        "left": round(l, 2),
+        "right": round(r, 2),
+        "click_X": gx, "click_Y": gy,
         "debug_image": f"data:image/jpeg;base64,{b64}"
     })
 
-# --- Utils ---
 def ok(d=None): return jsonify({"ok": True, "data": d})
 def err(msg, code=400): return jsonify({"ok": False, "error": msg}), code
+
+@atexit.register
+def _cleanup():
+    deploy_status["autopilot"] = False
+    time.sleep(0.1)
+    motors.stop()
+    camera.stop()
 
 if __name__ == "__main__":
     app.run(host=CONFIG["server"]["host"], port=CONFIG["server"]["port"], threaded=True)
