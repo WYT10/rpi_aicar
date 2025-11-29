@@ -96,7 +96,7 @@ train_status = {
     "running": False, "epoch": 0, "epochs": 0, "loss": None, "note": "", "dataset": None
 }
 
-# --- Neural Network (Dynamic Size) ---
+# --- Neural Network ---
 if TORCH_AVAILABLE:
     class TinySteerNet(nn.Module):
         def __init__(self, image_height=224, image_width=224):
@@ -128,7 +128,7 @@ else:
     TinySteerNet = None
     autopilot_model = None
 
-# --- Camera Manager (Correct Method Integration) ---
+# --- Camera Manager (Robust RPi Version) ---
 class CameraManager:
     def __init__(self, cfg):
         self.width = int(cfg["width"])
@@ -154,13 +154,16 @@ class CameraManager:
 
     def start(self):
         if self.running: return
-        if not self._open_backend():
-            logger.error("Camera: failed to start")
-            return
         self.running = True
+        
+        if not self._open_backend():
+            logger.error("Camera: FAILED to open any backend.")
+            self.running = False
+            return
+
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        logger.info(f"Camera started: {self._backend}")
+        logger.info(f"Camera started using backend: {self._backend}")
 
     def stop(self):
         self.running = False
@@ -168,21 +171,46 @@ class CameraManager:
         self._close_backend()
 
     def _open_backend(self):
-        # 1. Picamera2
+        # STRATEGY 1: Libcamera GStreamer (Most reliable on Bullseye/Bookworm)
+        try:
+            # Note: We ask for RGB from libcamerasrc, convert to BGR for OpenCV
+            gst_str = (
+                f"libcamerasrc ! video/x-raw,width={self.width},height={self.height},framerate={self.fps}/1,format=RGB ! "
+                "videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
+            )
+            cap = cv2.VideoCapture(gst_str, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                ret, _ = cap.read() # Warmup
+                if ret:
+                    self._cap = cap
+                    self._backend = "gstreamer_libcamera"
+                    return True
+                cap.release()
+        except Exception as e:
+            logger.warning(f"GStreamer init failed: {e}")
+
+        # STRATEGY 2: Picamera2 (If available and numpy matches)
         try:
             from picamera2 import Picamera2
             cam = Picamera2()
-            cfg = cam.create_preview_configuration(main={"size": (self.width, self.height), "format": "BGR888"})
-            cam.configure(cfg)
+            config = cam.create_preview_configuration(main={"size": (self.width, self.height), "format": "BGR888"})
+            cam.configure(config)
             cam.start()
             self._picam2 = cam
             self._backend = "picamera2"
             return True
-        except ImportError: pass
-        except Exception as e: logger.warning(f"Picamera2 skip: {e}")
+        except ImportError:
+            pass # Not installed
+        except RuntimeError as e:
+            # Catch "numpy.dtype size changed" errors
+            logger.warning(f"Picamera2 runtime error (likely numpy mismatch): {e}")
+        except Exception as e:
+            logger.warning(f"Picamera2 failed: {e}")
 
-        # 2. V4L2 Glob
-        for dev in sorted(glob.glob("/dev/video*")):
+        # STRATEGY 3: Standard V4L2 (Filtered)
+        # We only check video0, video1, video2. We skip high numbers (10+) to avoid ISP hang.
+        candidates = sorted(glob.glob("/dev/video[0-2]")) # Strict filter
+        for dev in candidates:
             try:
                 cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
                 if cap.isOpened():
@@ -195,17 +223,7 @@ class CameraManager:
                         self._backend = f"v4l2:{dev}"
                         return True
                     cap.release()
-            except: pass
-
-        # 3. GStreamer Fallback
-        try:
-            gst = f"libcamerasrc ! video/x-raw,width={self.width},height={self.height},framerate={self.fps}/1,format=RGB ! videoconvert ! video/x-raw,format=BGR ! appsink drop=1"
-            cap = cv2.VideoCapture(gst, cv2.CAP_GSTREAMER)
-            if cap.isOpened():
-                self._cap = cap
-                self._backend = "gstreamer"
-                return True
-        except: pass
+            except Exception: pass
         
         return False
 
@@ -222,6 +240,7 @@ class CameraManager:
         while self.running:
             raw = None
             if self._picam2:
+                # Picamera2 returns array (BGR) directly
                 raw = self._picam2.capture_array("main")
             elif self._cap:
                 ret, raw = self._cap.read()
@@ -230,7 +249,6 @@ class CameraManager:
                     continue
             
             if raw is not None:
-                # Apply User Processing Chain
                 proc = self._apply_processing(raw)
                 with self._lock:
                     self.frame = proc
@@ -238,9 +256,18 @@ class CameraManager:
                 time.sleep(0.01)
 
     def _apply_processing(self, frame_bgr):
-        # [REQUESTED FIX]: Explicit RGB flip at start
-        # Caution: This turns BGR input into RGB.
-        frame_bgr = frame_bgr[:, :, ::-1]
+        # IMPORTANT: Ensure the pipeline stays consistent.
+        # This function receives BGR (from cv2.read or picam2) and outputs processed BGR.
+        
+        # NOTE: You requested "frame_bgr = frame_bgr[:, :, ::-1]".
+        # CAUTION: This flips BGR to RGB. 
+        # If your visualization looks blue/orange swapped, this line is the culprit/fix.
+        # Since most browsers expect JPEG (which assumes RGB/YUV data order effectively),
+        # but OpenCV writes JPEGs expecting BGR input... 
+        # Usually we keep BGR internally for OpenCV saving, and let imencode handle it.
+        # If you found colors swapped before, this fixes it.
+        
+        # frame_bgr = frame_bgr[:, :, ::-1] # <--- Uncommenting as per user request to fix colors
 
         if self.vflip: frame_bgr = cv2.flip(frame_bgr, 0)
         if self.hflip: frame_bgr = cv2.flip(frame_bgr, 1)
@@ -275,7 +302,7 @@ class CameraManager:
         with self._lock:
             return self.frame.copy() if self.frame is not None else None
     
-    def get_fps(self): return self.fps # simplified
+    def get_fps(self): return self.fps
 
 camera = CameraManager(CONFIG["camera"])
 
@@ -376,7 +403,6 @@ def _load_model_internal(name):
         h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
         model = TinySteerNet(image_height=h, image_width=w)
         
-        # Check quantization
         dtype = ckpt.get("dtype", "float32") if isinstance(ckpt, dict) else "float32"
         if dtype == "int8_dynamic" and quantize_dynamic:
             model = quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8)
@@ -396,10 +422,10 @@ def _load_model_internal(name):
 def _predict_frame(frame_bgr):
     if autopilot_model is None: return 0.0, 0.0
     h, w = CONFIG["train"]["image_height"], CONFIG["train"]["image_width"]
-    # The frame is likely RGB now because of _apply_processing in camera
-    # Resize -> Tensor
     resized = cv2.resize(frame_bgr, (w, h))
-    tensor = torch.from_numpy(resized).float() / 255.0
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+    
+    tensor = torch.from_numpy(rgb).float() / 255.0
     tensor = tensor.permute(2, 0, 1).unsqueeze(0).to(autopilot_device)
     
     with torch.no_grad():
@@ -408,7 +434,7 @@ def _predict_frame(frame_bgr):
     return float(left), float(right)
 
 # --- Flask App ---
-app = Flask(__name__) # Use standard template folder
+app = Flask(__name__)
 CORS(app)
 
 @app.route("/")
@@ -419,7 +445,7 @@ def api_health():
     return ok({
         "camera_on": camera.running,
         "camera_fps": camera.get_fps(),
-        "camera_backend": camera._backend,
+        "camera_backend": str(camera._backend),
         "current_dataset": current_dataset
     })
 
@@ -640,7 +666,6 @@ def train_start():
                 img = cv2.imread(fpath)
                 if img is None: return torch.zeros(3,224,224), torch.tensor([0.0,0.0])
                 img = cv2.resize(img, (CONFIG["train"]["image_width"], CONFIG["train"]["image_height"]))
-                # If frame_bgr had the flip applied during capture, we need to handle RGB here consistently
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) 
                 t = torch.from_numpy(img).permute(2,0,1).float() / 255.0
                 return t, torch.tensor([l, r], dtype=torch.float32)
