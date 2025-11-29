@@ -6,7 +6,7 @@
   "camera": {
     "width": 224,
     "height": 224,
-    "fps": 15
+    "fps": 20
   },
   "motor": {
     "pins": {
@@ -20,9 +20,9 @@
     },
     "invert_left": false,
     "invert_right": false,
-    "pwm_freq": 1500,
-    "max_duty_pct": 90,
-    "deadzone": 0.03
+    "pwm_freq": 1000,
+    "max_duty_pct": 100,
+    "deadzone": 0.05
   },
   "paths": {
     "logs_root": "data/logs",
@@ -32,7 +32,7 @@
   "train": {
     "image_width": 224,
     "image_height": 224,
-    "default_epochs": 10,
+    "default_epochs": 15,
     "default_batch_size": 32,
     "default_learning_rate": 0.001
   },
@@ -40,8 +40,8 @@
     "default_model": "aicar_latest.pt",
     "fps": 20,
     "default_mode": "assist",
-    "default_assist_blend": 0.7,
+    "default_assist_blend": 0.6,
     "reflex_on": true,
-    "min_brightness": 18.0
+    "min_brightness": 20.0
   }
 }
